@@ -19,7 +19,7 @@
 </div>
 <br>
 
-`sitemap2urllist` is a CLI tool for parsing a sitemap and outputting a simple list of URLs, which can easily be piped into other tools (e.g., [lychee](https://github.com/lycheeverse/lychee))
+`sitemap2urllist` is a CLI tool for parsing a sitemap and outputting a simple list of URLs, which can easily be piped into other tools (e.g., [lychee](https://github.com/lycheeverse/lychee)).
 
 ## Install
 
