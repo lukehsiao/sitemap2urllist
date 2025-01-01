@@ -2,7 +2,7 @@ pub mod args;
 pub mod cache;
 pub mod sitemap;
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Result};
 use clap::{crate_name, crate_version};
@@ -185,10 +185,15 @@ pub async fn run(args: Args) -> Result<()> {
 
     let urlsets = get_urlsets(&args.url, &cache).await?;
 
+    let mut unique_urls = HashSet::new();
     for urlset in urlsets {
         for url in urlset.urls {
-            println!("{}", url.location.as_str());
+            unique_urls.insert(url.location.to_string());
         }
+    }
+
+    for url in unique_urls {
+        println!("{url}");
     }
 
     if args.cache {
