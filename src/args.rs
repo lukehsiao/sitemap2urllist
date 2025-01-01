@@ -12,7 +12,7 @@ pub struct Args {
     pub url: Url,
     /// Use request cache stored on disk at `.sitemapcache` (recommended).
     ///
-    /// Note that this only prevents refetching if the feed source responds
+    /// Note that this only prevents refetching if the sitemap source responds
     /// with a 429. In this case, we respect Retry-After, or default to 4h.
     /// Otherwise, the existence of a cache file just allows openring to respect
     /// `ETag` and `Last-Modified` headers for conditional requests.
