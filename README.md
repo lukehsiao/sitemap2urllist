@@ -57,3 +57,7 @@ sitemap2urllist https://www.numbersstation.ai/sitemap.xml --cache | xargs lychee
 ```
 
 Note you can combine this with [lychee's configuration](https://lychee.cli.rs/usage/config/) to do things like cache or ignore certain errors, etc.
+
+## Related Tools
+
+- [Sitemap-to-Urllist](https://github.com/matejkosiarcik/sitemap2urllist) (rust/shell/typescript): Simple sitemap.xml to urllist.txt converter (**abandoned**)
