@@ -8,7 +8,7 @@ use url::Url;
 #[command(author, version, about, long_about = None)]
 pub struct Args {
     /// The URL to a sitemap.
-    #[arg(short = 's', long, value_hint=ValueHint::Url)]
+    #[arg(value_hint=ValueHint::Url)]
     pub url: Url,
     /// Use request cache stored on disk at `.sitemapcache` (recommended).
     ///

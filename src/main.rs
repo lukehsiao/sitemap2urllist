@@ -1,8 +1,8 @@
 use clap::Parser;
-use miette::{Context, Result};
 use std::io;
 use tracing_log::AsTrace;
 
+use anyhow::Result;
 use sitemap2urllist::{self, args::Args};
 
 #[tokio::main]
@@ -17,5 +17,6 @@ async fn main() -> Result<()> {
         .with_writer(io::stderr)
         .init();
     // I feel like I shouldn't need wrap_err, but it doesn't work without it.
-    sitemap2urllist::run(args).await.wrap_err("runtime error")
+    sitemap2urllist::run(args).await?;
+    Ok(())
 }
