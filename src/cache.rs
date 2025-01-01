@@ -1,12 +1,13 @@
 use std::{cmp::Ordering, fs, path::Path, time::Duration};
 
+use anyhow::Result;
 use dashmap::DashMap;
 use jiff::{Span, Timestamp, ToSpan};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use url::Url;
 
-use crate::{args::Args, error::Result};
+use crate::args::Args;
 
 pub(crate) const SITEMAP_CACHE_FILE: &str = ".sitemapcache";
 

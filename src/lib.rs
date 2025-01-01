@@ -1,298 +1,199 @@
 pub mod args;
 pub mod cache;
-pub mod error;
-pub mod urlparser;
+pub mod sitemap;
 
-use std::{
-    collections::HashSet,
-    fs::{self, File},
-    io::{BufRead, BufReader},
-    path::Path,
-    sync::Arc,
-};
+use std::{sync::Arc, time::Duration};
 
-use jiff::{tz::TimeZone, Timestamp};
-use miette::NamedSource;
-use serde::Serialize;
+use anyhow::{anyhow, Result};
+use clap::{crate_name, crate_version};
+use jiff::{Timestamp, ToSpan};
+use quick_xml::de;
+use reqwest::{Client, ClientBuilder, StatusCode};
 use tokio::task::JoinSet;
-use tracing::{debug, info, warn};
-use url::{ParseError, Url};
-use yansi::Paint;
+use tracing::{debug, warn};
+use url::Url;
 
 use crate::{
     args::Args,
-    cache::{Cache, StoreExt, SITEMAP_CACHE_FILE},
-    error::{Result, SiteMap},
+    cache::{Cache, CacheValue, StoreExt, SITEMAP_CACHE_FILE},
+    sitemap::{SitemapIndex, UrlSet},
 };
 
-// Get URLs from sitemap.
-//
-// For sitemaps that reference children sitemaps, this crawl propagates to them as well.
-async fn get_sitemaps_from_url(url: &Url, cache: &Arc<Cache>) -> Vec<(Url, String)> {
-    let mut join_set = JoinSet::new();
-    let mut pending_urls: HashSet<&Url> = HashSet::from_iter(urls);
+#[allow(clippy::too_many_lines)]
+async fn fetch_with_cache(client: &Client, url: &Url, cache: &Arc<Cache>) -> Result<String> {
+    let r = {
+        let cache_value = cache.get(url);
 
-    pb.set_message(
-        pending_urls
-            .iter()
-            .map(|u| u.as_str())
-            .collect::<Vec<&str>>()
-            .join(", "),
-    );
-
-    for url in urls {
-        let cache_clone = Arc::clone(cache);
-        let url_clone = url.clone();
-        join_set.spawn(async move {
-            let fetch_result = url_clone.fetch_feed(&cache_clone).await;
-            (url_clone, fetch_result)
-        });
-    }
-    let mut feeds = Vec::new();
-
-    while let Some(result) = join_set.join_next().await {
-        pb.inc(1);
-        match result {
-            Ok((url, Ok(feed))) => {
-                pending_urls.remove(&url);
-                pb.set_message(
-                    pending_urls
-                        .iter()
-                        .map(|u| u.as_str())
-                        .collect::<Vec<&str>>()
-                        .join(", "),
-                );
-                pb.println(format!("{:>8} {url}", "Fetched".bold().green()));
-                feeds.push((feed, url));
+        // Respect Retry-After Header if set in cache
+        if let Some(ref cv) = cache_value {
+            if let Some(retry) = cv.retry_after {
+                if cv.timestamp + retry > Timestamp::now() {
+                    debug!(timestamp=%cv.timestamp, retry_after=%retry, "skipping request due to 429, using response from cache");
+                    return cv
+                        .body
+                        .clone()
+                        .ok_or(anyhow!("Cache has an empty response for {}", url.as_str()));
+                }
             }
-            Ok((url, Err(e))) => {
-                pending_urls.remove(&url);
-                pb.set_message(
-                    pending_urls
-                        .iter()
-                        .map(|u| u.as_str())
-                        .collect::<Vec<&str>>()
-                        .join(", "),
-                );
-                pb.println(format!("{:>8} {url} ({e})", "Error".bold().red()));
-            }
-            _ => (),
         }
-    }
 
-    pb.finish_and_clear();
-    feeds
+        // Otherwise, go fetch again
+        let mut r = client.get(url.as_str());
+        // Add friendly headers if cache is available
+        if let Some(ref cv) = cache_value {
+            if let Some(last_modified) = &cv.last_modified {
+                r = r.header("If-Modified-Since", last_modified);
+            }
+            if let Some(etag) = &cv.etag {
+                r = r.header("If-None-Match", etag);
+            }
+        }
+        r
+    };
+    debug!(url=%url.as_str(), request=?r, "sending request");
+    let body = match r.send().await {
+        Ok(r) => {
+            debug!(url=%url.as_str(), response=?r, "received response");
+            match r.status() {
+                s if s.is_success() || s == StatusCode::NOT_MODIFIED => {
+                    // ETag values must have the actual quotes
+                    let etag = r.headers().get("etag").and_then(|etag_value| {
+                        // Convert header to str
+                        etag_value.to_str().ok().map(|etag_str| {
+                            if (etag_str.starts_with('"') && etag_str.ends_with('"'))
+                                || (etag_str.starts_with("W/\"") && etag_str.ends_with('"'))
+                            {
+                                etag_str.to_string()
+                            } else {
+                                format!("\"{etag_str}\"")
+                            }
+                        })
+                    });
+                    let last_modified = r.headers().get("last-modified").and_then(|lm_value| {
+                        lm_value.to_str().ok().map(std::string::ToString::to_string)
+                    });
+                    let status = r.status();
+                    let mut body = r.text().await.ok();
+
+                    // Update cache
+                    {
+                        let cache_value = cache.get_mut(url);
+                        if let Some(mut cv) = cache_value {
+                            if status == StatusCode::NOT_MODIFIED {
+                                debug!(url=%url.as_str(), status=status.as_str(), "got 304, using sitemap from cache");
+                                body.clone_from(&cv.body);
+                            } else {
+                                debug!(url=%url.as_str(), status=status.as_str(), "cache hit, using sitemap from body");
+                                cv.etag = etag;
+                                cv.last_modified = last_modified;
+                                cv.body.clone_from(&body);
+                            }
+                            cv.timestamp = Timestamp::now();
+                        } else {
+                            debug!(url=%url.as_str(), status=status.as_str(), "using sitemap from body and adding to cache");
+                            cache.insert(
+                                url.clone(),
+                                CacheValue {
+                                    timestamp: Timestamp::now(),
+                                    retry_after: None,
+                                    etag,
+                                    last_modified,
+                                    body: body.clone(),
+                                },
+                            );
+                        }
+                    }
+                    body.ok_or(anyhow!("sitemap is empty: {}", url.as_str()))
+                }
+                StatusCode::TOO_MANY_REQUESTS => {
+                    let cache_value = cache.get_mut(url);
+                    if let Some(mut cv) = cache_value {
+                        cv.timestamp = Timestamp::now();
+                        // Default to waiting 4 hrs if no Retry-After
+                        let retry_after = r
+                            .headers()
+                            .get("retry-after")
+                            .and_then(|retry_value| {
+                                retry_value.to_str().ok().map(|retry_str| {
+                                    retry_str.parse::<i64>().map(ToSpan::seconds).ok()
+                                })
+                            })
+                            .unwrap_or(Some(4.hours()));
+                        debug!(url=%url.as_str(), response=?r, "got 429, using sitemap from cache");
+                        cv.timestamp = Timestamp::now();
+                        cv.retry_after = retry_after;
+                        cv.body
+                            .clone()
+                            .ok_or(anyhow!("sitemap is empty: {}", url.as_str()))
+                    } else {
+                        Err(anyhow!("rate limit error {}", url.as_str()))
+                    }
+                }
+                unexpected => Err(anyhow!(
+                    "unexpected error: {} for {}",
+                    unexpected.as_str(),
+                    url.as_str()
+                )),
+            }
+        }
+        Err(e) => {
+            warn!(url=%url.as_str(), error=%e, "failed to get sitemap.");
+            Err(e.into())
+        }
+    };
+    body
+}
+
+async fn get_urlsets(url: &Url, cache: &Arc<Cache>) -> Result<Vec<UrlSet>> {
+    // Get the main sitemap and start parsing
+    let client = ClientBuilder::new()
+        .timeout(Duration::from_secs(30))
+        .user_agent(concat!(crate_name!(), '/', crate_version!()))
+        .build()?;
+    // let res = client.get(url).send().await?.text().await?;
+    let res = fetch_with_cache(&client, url, cache).await?;
+
+    // Google enforces that sitemap indexes cannot contain other sitemap indices,
+    // so we don't go deeper than 1 level.
+    let urlsets: Result<Vec<UrlSet>> = {
+        let mut tasks = JoinSet::new();
+        if let Ok(sitemap_idx) = de::from_str::<SitemapIndex>(&res) {
+            for ptr in sitemap_idx.sitemaps {
+                let client = client.clone();
+                let cache = cache.clone();
+                tasks.spawn(async move {
+                    let url_set = de::from_str::<UrlSet>(
+                        &fetch_with_cache(&client, &ptr.location, &cache).await?,
+                    )?;
+                    Ok(url_set)
+                });
+            }
+            tasks.join_all().await.into_iter().collect()
+        } else {
+            Ok(vec![de::from_str::<UrlSet>(&res)?])
+        }
+    };
+    urlsets
 }
 
 #[allow(clippy::missing_panics_doc)]
 #[allow(clippy::missing_errors_doc)]
-#[allow(clippy::too_many_lines)]
 pub async fn run(args: Args) -> Result<()> {
     debug!(?args);
     let cache = cache::load_cache(&args).unwrap_or_default();
     let cache = Arc::new(cache);
 
-    let mut urls = args.url;
+    let urlsets = get_urlsets(&args.url, &cache).await?;
 
-    if let Some(path) = args.url_file {
-        let mut file_urls = parse_urls_from_file(&path)?;
-        urls.append(&mut file_urls);
-    };
-
-    if urls.is_empty() {
-        return Err(OpenringError::FeedMissing);
-    }
-
-    // Deduplicate
-    let urls: Vec<Url> = {
-        let unique: HashSet<Url> = urls.into_iter().collect();
-        unique.into_iter().collect()
-    };
-
-    let feeds = get_feeds_from_urls(&urls, &cache).await;
-
-    if args.cache {
-        cache.store(OPENRING_CACHE_FILE)?;
-    }
-
-    let template = fs::read_to_string(&args.template_file)?;
-    let mut context = tera::Context::new();
-
-    // Grab articles from all the feeds
-    let mut articles = Vec::new();
-    for (feed, url) in feeds {
-        let entries = if feed.entries.len() >= args.per_source {
-            &feed.entries[0..args.per_source]
-        } else {
-            &feed.entries
-        };
-
-        let source_title = match feed.title {
-            Some(ref t) => {
-                if t.content.is_empty() {
-                    url.domain().unwrap().to_owned()
-                } else {
-                    t.content.clone()
-                }
-            }
-            None => url.domain().unwrap().to_owned(),
-        };
-        let source_link = match &feed.title.as_ref().unwrap().src {
-            None => {
-                // Then, look for links
-                match feed
-                    .links
-                    .iter()
-                    .find(|l| {
-                        if let Some(rel) = &l.rel {
-                            rel == "alternate"
-                        } else {
-                            false
-                        }
-                    })
-                    .map(|l| &l.href)
-                {
-                    None => {
-                        // If an alternate link is missing just grab one of them
-                        match feed
-                            .links
-                            .into_iter()
-                            // Ignore "self" rels, which usually link to feed
-                            .find(|l| l.rel.as_ref().is_none_or(|r| r != "self"))
-                            .map(|l| l.href)
-                        {
-                            Some(s) => {
-                                match Url::parse(&s) {
-                                    Ok(u) => u,
-                                    Err(ParseError::RelativeUrlWithoutBase) => Url::parse(
-                                        &format!("{}{}", url.origin().ascii_serialization(), &s),
-                                    )?,
-                                    Err(e) => return Err(OpenringError::UrlParseError(e)),
-                                }
-                            }
-                            None => return Err(OpenringError::FeedBadTitle(url.to_string())),
-                        }
-                    }
-                    Some(s) => match Url::parse(s) {
-                        Ok(u) => u,
-                        Err(ParseError::RelativeUrlWithoutBase) => {
-                            Url::parse(&format!("{}{}", url.origin().ascii_serialization(), &s))?
-                        }
-                        Err(e) => return Err(OpenringError::UrlParseError(e)),
-                    },
-                }
-            }
-            Some(s) => match Url::parse(s) {
-                Ok(u) => u,
-                Err(ParseError::RelativeUrlWithoutBase) => {
-                    Url::parse(&format!("{}{}", url.origin().ascii_serialization(), &s))?
-                }
-                Err(e) => return Err(OpenringError::UrlParseError(e)),
-            },
-        };
-        for entry in entries {
-            if let (Some(link), Some(title), Some(date)) =
-                (
-                    match entry
-                        .links
-                        .iter()
-                        .find(|l| {
-                            if let Some(rel) = &l.rel {
-                                rel == "alternate"
-                            } else {
-                                false
-                            }
-                        })
-                        .map(|l| &l.href)
-                    {
-                        Some(s) => match Url::parse(s) {
-                            Ok(u) => Some(u),
-                            Err(ParseError::RelativeUrlWithoutBase) => {
-                                Url::parse(&format!("{}{}", url.origin().ascii_serialization(), &s))
-                                    .ok()
-                            }
-                            Err(_) => None,
-                        },
-                        None => {
-                            // If an alternate link is missing just grab one of them
-                            match entry.links.clone().into_iter().next().map(|l| l.href) {
-                                Some(s) => match Url::parse(&s) {
-                                    Ok(u) => Some(u),
-                                    Err(ParseError::RelativeUrlWithoutBase) => Url::parse(
-                                        &format!("{}{}", url.origin().ascii_serialization(), &s),
-                                    )
-                                    .ok(),
-                                    Err(_) => None,
-                                },
-                                None => return Err(OpenringError::FeedBadTitle(url.to_string())),
-                            }
-                        }
-                    },
-                    entry.title.as_ref().map(|t| &t.content),
-                    entry.published.or(entry.updated),
-                )
-            {
-                // Skip articles after args.before, if present
-                let timestamp = Timestamp::from_second(date.timestamp())?;
-                if let Some(before) = args.before {
-                    if timestamp > before.to_zoned(TimeZone::system())?.timestamp() {
-                        continue;
-                    }
-                }
-
-                let summary = match &entry.summary {
-                    Some(s) => &s.content,
-                    None => {
-                        if let Some(c) = &entry.content {
-                            if let Some(b) = &c.body {
-                                b
-                            } else {
-                                info!(?link, ?source_link, "no summary or content provided.");
-                                ""
-                            }
-                        } else {
-                            info!(?link, ?source_link, "no summary or content provided.");
-                            ""
-                        }
-                    }
-                };
-
-                let mut safe_summary = String::new();
-                html_escape::decode_html_entities_to_string(
-                    ammonia::clean(summary),
-                    &mut safe_summary,
-                );
-                articles.push(Article {
-                    link,
-                    title: title.to_string(),
-                    summary: safe_summary.trim().to_string(),
-                    source_link: source_link.clone(),
-                    source_title: source_title.clone(),
-                    timestamp,
-                });
-            } else {
-                warn!(
-                    entry_links=?entry.links,
-                    entry_title=?entry.title,
-                    entry_published=?entry.published,
-                    entry_updated=?entry.updated,
-                    source=url.as_str(),
-                    "skipping entry: must have link, title, and a date."
-                );
-            }
+    for urlset in urlsets {
+        for url in urlset.urls {
+            println!("{}", url.location.as_str());
         }
     }
 
-    articles.sort_unstable_by(|a, b| a.timestamp.cmp(&b.timestamp).reverse());
-    let articles = if articles.len() >= args.num_articles {
-        &articles[0..args.num_articles]
-    } else {
-        &articles
-    };
+    if args.cache {
+        cache.store(SITEMAP_CACHE_FILE)?;
+    }
 
-    context.insert("articles", articles);
-    // TODO: this validation of the template should come before all the time spent fetching feeds.
-    let output = Tera::one_off(&template, &context, true)?;
-    println!("{output}");
     Ok(())
 }

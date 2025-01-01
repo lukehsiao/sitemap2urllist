@@ -16,8 +16,8 @@ link-check:
 	-lychee -E '**/*.md'
 
 # Runs nextest
-test:
-	cargo nextest run
+test *FLAGS:
+	cargo nextest run {{FLAGS}}
 
 # Sets up a watcher that lints, tests, and builds
 watch:
