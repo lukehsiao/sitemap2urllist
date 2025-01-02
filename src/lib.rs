@@ -7,10 +7,10 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 use anyhow::{anyhow, Result};
 use clap::{crate_name, crate_version};
 use jiff::{Timestamp, ToSpan};
-use quick_xml::de;
+use quick_xml::{de, errors::serialize::DeError::InvalidXml};
 use reqwest::{Client, ClientBuilder, StatusCode};
 use tokio::task::JoinSet;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 use url::Url;
 
 use crate::{
@@ -162,15 +162,42 @@ async fn get_urlsets(url: &Url, cache: &Arc<Cache>) -> Result<Vec<UrlSet>> {
                 let client = client.clone();
                 let cache = cache.clone();
                 tasks.spawn(async move {
-                    let url_set = de::from_str::<UrlSet>(
+                    let url_set = match de::from_str::<UrlSet>(
                         &fetch_with_cache(&client, &ptr.location, &cache).await?,
-                    )?;
+                    ) {
+                        Ok(s) => s,
+                        Err(e) => match e {
+                            InvalidXml(e) => Err(anyhow!(
+                                "Invalid XML ({}), is {} a valid XML sitemap?",
+                                e,
+                                ptr.location.as_str()
+                            )),
+                            _ => {
+                                error!(error = %e, "failed to parse xml");
+                                Err(e)
+                            }?,
+                        }?,
+                    };
                     Ok(url_set)
                 });
             }
             tasks.join_all().await.into_iter().collect()
         } else {
-            Ok(vec![de::from_str::<UrlSet>(&res)?])
+            let url_set = match de::from_str::<UrlSet>(&res) {
+                Ok(s) => s,
+                Err(e) => match e {
+                    InvalidXml(e) => Err(anyhow!(
+                        "Invalid XML ({}), is {} a valid XML sitemap?",
+                        e,
+                        url.as_str()
+                    )),
+                    _ => {
+                        error!(error = %e, "failed to parse xml");
+                        Err(e)
+                    }?,
+                }?,
+            };
+            Ok(vec![url_set])
         }
     };
     urlsets
