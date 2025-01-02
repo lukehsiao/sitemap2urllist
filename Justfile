@@ -53,6 +53,7 @@ _incr_version version: (_update_changelog version)
 _tlog describe version:
 	# Format git-cliff output friendly for the tag
 	@git cliff -c minimal --strip all --unreleased --tag {{version}} | sd "(^## .*\n\s+|^See the.*|^\[.*|^\s*$|^###\s)" ""
+	@echo -e "\n\n"
 	@echo "$ git stats -r {{describe}}..{{version}}"
 	@git stats -r {{describe}}..HEAD
 
