@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 ---
+## [0.1.4](https://github.com/lukehsiao/sitemap2urllist/compare/v0.1.3..v0.1.4) - 2025-01-02
+
+### Documentation
+
+- fix name of program in --help - ([cc8d1cd](https://github.com/lukehsiao/sitemap2urllist/commit/cc8d1cdb31632d44d2778fbe865dace00febf68b)) - Luke Hsiao
+
+---
 ## [0.1.3](https://github.com/lukehsiao/sitemap2urllist/compare/v0.1.2..v0.1.3) - 2025-01-02
 
 ### Bug Fixes
