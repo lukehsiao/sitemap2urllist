@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 ---
+## [0.1.3](https://github.com/lukehsiao/sitemap2urllist/compare/v0.1.2..v0.1.3) - 2025-01-02
+
+### Bug Fixes
+
+- provide a more useful error message on invalid xml - ([ad9a500](https://github.com/lukehsiao/sitemap2urllist/commit/ad9a5001b6bd2f67f7252a64d13c84e27e116bfa)) - Luke Hsiao
+
+---
 ## [0.1.2](https://github.com/lukehsiao/sitemap2urllist/compare/v0.1.1..v0.1.2) - 2025-01-01
 
 ### Features
