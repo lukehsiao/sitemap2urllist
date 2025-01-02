@@ -14,8 +14,8 @@ pub struct Args {
     ///
     /// Note that this only prevents refetching if the sitemap source responds
     /// with a 429. In this case, we respect Retry-After, or default to 4h.
-    /// Otherwise, the existence of a cache file just allows openring to respect
-    /// `ETag` and `Last-Modified` headers for conditional requests.
+    /// Otherwise, the existence of a cache file just allows sitemap2urllist to
+    /// respect `ETag` and `Last-Modified` headers for conditional requests.
     #[arg(short, long)]
     pub cache: bool,
     /// Discard all cached requests older than this duration
