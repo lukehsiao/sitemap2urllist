@@ -24,7 +24,7 @@ log = "0.4.25"
 quick-xml = { version = "0.37.2", features = ["serialize"] }
 reqwest = { version = "0.12.12", features = ["gzip", "brotli", "zstd", "deflate"] }
 serde = { version = "1.0.217", features = ["derive"] }
-serde_json = "1.0.138"
+serde_json = "1.0.139"
 tokio = { version = "1.43.0", features = ["full"] }
 tracing = "0.1.41"
 tracing-log = "0.2.0"
