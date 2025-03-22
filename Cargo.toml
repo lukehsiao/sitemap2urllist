@@ -1,7 +1,7 @@
 [package]
 name = "sitemap2urllist"
 version = "0.1.4"
-edition = "2021"
+edition = "2024"
 authors = ["Luke Hsiao <luke@hsiao.dev>"]
 description = "Read a sitemap and output a list of URLs."
 repository = "https://github.com/lukehsiao/sitemap2urllist"

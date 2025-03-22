@@ -4,7 +4,7 @@ pub mod sitemap;
 
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use clap::{crate_name, crate_version};
 use jiff::{Timestamp, ToSpan};
 use quick_xml::{de, errors::serialize::DeError::InvalidXml};
@@ -15,7 +15,7 @@ use url::Url;
 
 use crate::{
     args::Args,
-    cache::{Cache, CacheValue, StoreExt, SITEMAP_CACHE_FILE},
+    cache::{Cache, CacheValue, SITEMAP_CACHE_FILE, StoreExt},
     sitemap::{SitemapIndex, UrlSet},
 };
 
