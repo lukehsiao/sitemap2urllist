@@ -25,16 +25,15 @@ async fn fetch_with_cache(client: &Client, url: &Url, cache: &Arc<Cache>) -> Res
         let cache_value = cache.get(url);
 
         // Respect Retry-After Header if set in cache
-        if let Some(ref cv) = cache_value {
-            if let Some(retry) = cv.retry_after {
-                if cv.timestamp + retry > Timestamp::now() {
-                    debug!(timestamp=%cv.timestamp, retry_after=%retry, "skipping request due to 429, using response from cache");
-                    return cv
-                        .body
-                        .clone()
-                        .ok_or(anyhow!("Cache has an empty response for {}", url.as_str()));
-                }
-            }
+        if let Some(ref cv) = cache_value
+            && let Some(retry) = cv.retry_after
+            && cv.timestamp + retry > Timestamp::now()
+        {
+            debug!(timestamp=%cv.timestamp, retry_after=%retry, "skipping request due to 429, using response from cache");
+            return cv
+                .body
+                .clone()
+                .ok_or(anyhow!("Cache has an empty response for {}", url.as_str()));
         }
 
         // Otherwise, go fetch again
@@ -51,7 +50,7 @@ async fn fetch_with_cache(client: &Client, url: &Url, cache: &Arc<Cache>) -> Res
         r
     };
     debug!(url=%url.as_str(), request=?r, "sending request");
-    let body = match r.send().await {
+    match r.send().await {
         Ok(r) => {
             debug!(url=%url.as_str(), response=?r, "received response");
             match r.status() {
@@ -140,8 +139,7 @@ async fn fetch_with_cache(client: &Client, url: &Url, cache: &Arc<Cache>) -> Res
             warn!(url=%url.as_str(), error=%e, "failed to get sitemap.");
             Err(e.into())
         }
-    };
-    body
+    }
 }
 
 async fn get_urlsets(url: &Url, cache: &Arc<Cache>) -> Result<Vec<UrlSet>> {
