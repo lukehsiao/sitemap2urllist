@@ -1,6 +1,6 @@
 {
   "name": "sitemap2urllist",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "devDependencies": {
     "@changesets/changelog-github": "^0.5.2",
