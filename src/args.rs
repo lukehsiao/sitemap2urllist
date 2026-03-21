@@ -10,19 +10,19 @@ pub struct Args {
     /// The URL to a sitemap.
     #[arg(value_hint=ValueHint::Url)]
     pub url: Url,
-    /// Use request cache stored on disk at `.sitemapcache` (recommended).
+    /// Do NOT use request cache stored on disk.
     ///
-    /// Note that this only prevents refetching if the sitemap source responds
-    /// with a 429. In this case, we respect Retry-After, or default to 4h.
-    /// Otherwise, the existence of a cache file just allows sitemap2urllist to
-    /// respect `ETag` and `Last-Modified` headers for conditional requests.
-    #[arg(short, long)]
-    pub cache: bool,
+    /// Note that the cache only prevents refetching if the sitemap source
+    /// responds with a 429. In this case, we respect Retry-After, or default to
+    /// 4h. Otherwise, the existence of a cache file just allows sitemap2urllist
+    /// to respect `ETag` and `Last-Modified` headers for conditional requests.
+    #[arg(long)]
+    pub no_cache: bool,
     /// Discard all cached requests older than this duration
     #[arg(
         long,
         value_parser = humantime::parse_duration,
-        default_value = "14d"
+        default_value = "30d"
     )]
     pub max_cache_age: Duration,
     #[clap(flatten)]

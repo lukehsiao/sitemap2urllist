@@ -15,7 +15,7 @@ use url::Url;
 
 use crate::{
     args::Args,
-    cache::{Cache, CacheValue, SITEMAP_CACHE_FILE, StoreExt},
+    cache::{Cache, CachePath, CacheValue, StoreExt},
     sitemap::{SitemapIndex, UrlSet},
 };
 
@@ -205,7 +205,7 @@ async fn get_urlsets(url: &Url, cache: &Arc<Cache>) -> Result<Vec<UrlSet>> {
 #[allow(clippy::missing_errors_doc)]
 pub async fn run(args: Args) -> Result<()> {
     debug!(?args);
-    let cache = cache::load_cache(&args).unwrap_or_default();
+    let cache = cache::load_cache(&args, CachePath::Default).unwrap_or_default();
     let cache = Arc::new(cache);
 
     let urlsets = get_urlsets(&args.url, &cache).await?;
@@ -221,8 +221,10 @@ pub async fn run(args: Args) -> Result<()> {
         println!("{url}");
     }
 
-    if args.cache {
-        cache.store(SITEMAP_CACHE_FILE)?;
+    if let Some(cache_path) = cache::get_cache_path()
+        && !args.no_cache
+    {
+        cache.store(cache_path)?;
     }
 
     Ok(())

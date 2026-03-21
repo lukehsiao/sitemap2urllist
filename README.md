@@ -44,8 +44,8 @@ Arguments:
   <URL>  The URL to a sitemap
 
 Options:
-  -c, --cache                          Use request cache stored on disk at `.sitemapcache` (recommended)
-      --max-cache-age <MAX_CACHE_AGE>  Discard all cached requests older than this duration [default: 14d]
+      --no-cache                       Do NOT use request cache stored on disk
+      --max-cache-age <MAX_CACHE_AGE>  Discard all cached requests older than this duration [default: 30d]
   -v, --verbose...                     Increase logging verbosity
   -q, --quiet...                       Decrease logging verbosity
   -h, --help                           Print help (see more with '--help')
@@ -59,10 +59,24 @@ At some point, it is likely link checkers like lychee obviate the need for this 
 In the meantime, it is easy to run a link check from your local machine on an entire website as defined by its sitemap by doing something like the following.
 
 ```
-sitemap2urllist https://www.numbersstation.ai/sitemap.xml --cache | xargs lychee --cache
+sitemap2urllist https://alumni.cottonwoodhigh.school/sitemap-index.xml --cache | xargs lychee --cache
 ```
 
 Note you can combine this with [lychee's configuration](https://lychee.cli.rs/usage/config/) to do things like cache or ignore certain errors, etc.
+
+## Caching
+
+We use OS-standard locations for caching.
+
+- **Linux**: `$XDG_CACHE_HOME/sitemap2urllist/cache.json` or `$HOME/.cache/sitemap2urllist/cache.json`
+- **macOS**: `$HOME/Library/Caches/dev.hsiao.sitemap2urllist/cache.json`
+- **Windows**: `{FOLDERID_LocalAppData}\hsiao\sitemap2urllist\cache\cache.json`
+
+The cache file is simple JSON.
+
+The cache only prevents refetching a feed if the feed source responds with a 429.
+In this case, we respect `Retry-After`, or default to 4 hours.
+Otherwise, we use the cache to send conditional requests by respecting the `ETag` and `Last-Modified` headers.
 
 ## Related Tools
 

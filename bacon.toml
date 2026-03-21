@@ -20,6 +20,7 @@ need_stdout = false
 [jobs.clippy]
 command = ["cargo", "clippy"]
 need_stdout = false
+hide_scrollbar = true
 
 # Run clippy on all targets
 # To disable some lints, you may change the job this way:

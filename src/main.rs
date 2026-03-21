@@ -16,7 +16,6 @@ async fn main() -> Result<()> {
         ))
         .with_writer(io::stderr)
         .init();
-    // I feel like I shouldn't need wrap_err, but it doesn't work without it.
     sitemap2urllist::run(args).await?;
     Ok(())
 }
