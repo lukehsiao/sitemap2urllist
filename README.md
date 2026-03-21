@@ -27,6 +27,12 @@
 cargo install --locked sitemap2urllist
 ```
 
+Or, if you use [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall):
+
+```
+cargo binstall sitemap2urllist
+```
+
 ## Usage
 
 ```
