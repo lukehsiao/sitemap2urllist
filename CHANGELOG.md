@@ -1,8 +1,5 @@
 # Changelog
 
-All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
-
----
 ## [0.1.4](https://github.com/lukehsiao/sitemap2urllist/compare/v0.1.3..v0.1.4) - 2025-01-02
 
 ### Documentation

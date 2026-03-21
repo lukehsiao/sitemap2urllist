@@ -1,0 +1,125 @@
+name: Binaries
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to attach binaries to (e.g. v0.1.21)"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach binaries to (e.g. v0.1.21)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            use-cross: false
+            ext: tar.gz
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            use-cross: true
+            ext: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            use-cross: true
+            ext: tar.gz
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-latest
+            use-cross: true
+            ext: tar.gz
+          - target: armv7-unknown-linux-gnueabihf
+            runner: ubuntu-latest
+            use-cross: true
+            ext: tar.gz
+          - target: armv7-unknown-linux-musleabihf
+            runner: ubuntu-latest
+            use-cross: true
+            ext: tar.gz
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            use-cross: false
+            ext: tar.gz
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            use-cross: false
+            ext: tar.gz
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            use-cross: false
+            ext: zip
+          - target: aarch64-pc-windows-msvc
+            runner: windows-latest
+            use-cross: false
+            ext: zip
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use-cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build
+        shell: bash
+        run: |
+          if [[ "${{ matrix.use-cross }}" == "true" ]]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+
+      - name: Create archive (tar.gz)
+        if: matrix.ext == 'tar.gz'
+        shell: bash
+        run: |
+          tar czf sitemap2urllist-${{ matrix.target }}.tar.gz \
+            -C target/${{ matrix.target }}/release sitemap2urllist
+
+      - name: Create archive (zip, Windows)
+        if: matrix.ext == 'zip' && runner.os == 'Windows'
+        shell: bash
+        run: |
+          7z a sitemap2urllist-${{ matrix.target }}.zip \
+            ./target/${{ matrix.target }}/release/sitemap2urllist.exe
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            shasum -a 256 sitemap2urllist-${{ matrix.target }}.${{ matrix.ext }} > sitemap2urllist-${{ matrix.target }}.${{ matrix.ext }}.sha256
+          else
+            sha256sum sitemap2urllist-${{ matrix.target }}.${{ matrix.ext }} > sitemap2urllist-${{ matrix.target }}.${{ matrix.ext }}.sha256
+          fi
+
+      - name: Upload to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload ${{ inputs.tag }} \
+            sitemap2urllist-${{ matrix.target }}.${{ matrix.ext }} \
+            sitemap2urllist-${{ matrix.target }}.${{ matrix.ext }}.sha256 \
+            --clobber
+
