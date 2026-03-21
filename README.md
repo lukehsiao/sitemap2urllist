@@ -59,7 +59,7 @@ At some point, it is likely link checkers like lychee obviate the need for this 
 In the meantime, it is easy to run a link check from your local machine on an entire website as defined by its sitemap by doing something like the following.
 
 ```
-sitemap2urllist https://alumni.cottonwoodhigh.school/sitemap-index.xml --cache | xargs lychee --cache
+sitemap2urllist https://alumni.cottonwoodhigh.school/sitemap-index.xml | xargs lychee --cache
 ```
 
 Note you can combine this with [lychee's configuration](https://lychee.cli.rs/usage/config/) to do things like cache or ignore certain errors, etc.
