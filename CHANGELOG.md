@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.6
+
+### Patch Changes
+
+- [`6fbc4ad`](https://github.com/lukehsiao/sitemap2urllist/commit/6fbc4ade7354bbaedabede99b6cdc5d7515cc4bf) Thanks [@lukehsiao](https://github.com/lukehsiao)! - **Documentation**: fix example usage in README.
+
+<pre>
+$ git-stats v0.1.5..v0.1.6
+Author      Commits  Changed Files  Insertions  Deletions  Net Δ
+Luke Hsiao        1              2          +6         -1     +5
+Total             1              2          +6         -1     +5
+</pre>
+
 ## 0.1.5
 
 ### Patch Changes
