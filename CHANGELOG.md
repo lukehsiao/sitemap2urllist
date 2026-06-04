@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.7
+
+### Patch Changes
+
+- [`e69c13b`](https://github.com/lukehsiao/sitemap2urllist/commit/e69c13ba04738eb317b4e1a7a4233e7d44c88dcb) Thanks [@lukehsiao](https://github.com/lukehsiao)! - **refactor**: now sorts the output URLs for deterministic ordering.
+
+<pre>
+$ git-stats v0.1.6..v0.1.7
+Author               Commits  Changed Files  Insertions  Deletions  Net Δ
+Luke Hsiao                34            117       +9212      -2916  +6296
+dependabot[bot]            6             11         +26        -26      0
+github-actions[bot]        2             11         +43        -26    +17
+Total                     42            139       +9281      -2968  +6313
+</pre>
+
 ## 0.1.6
 
 ### Patch Changes
