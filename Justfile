@@ -8,6 +8,16 @@ _default:
 check:
 	cargo clippy --all-targets --all-features --locked -- -W clippy::pedantic -D warnings
 
+# Runs the test suite
+[group('dev')]
+test:
+	cargo nextest run
+
+# Runs the test suite to compute coverage
+[group('dev')]
+coverage *FLAGS:
+	cargo llvm-cov nextest {{ FLAGS }}
+
 # check security advisories
 [group('dev')]
 audit:

@@ -30,6 +30,21 @@ pub struct Args {
 }
 
 #[cfg(test)]
+impl Default for Args {
+    fn default() -> Self {
+        Args {
+            // `Url` has no `Default`; tests that need a placeholder override `url`
+            // anyway, so any well-formed URL works here.
+            url: Url::parse("https://example.invalid/sitemap.xml").expect("valid url"),
+            no_cache: false,
+            // 720 hours == 30 days, mirroring the clap `default_value = "30d"`.
+            max_cache_age: Duration::from_hours(720),
+            verbose: Verbosity::default(),
+        }
+    }
+}
+
+#[cfg(test)]
 mod test {
     use crate::*;
     #[test]

@@ -1,5 +1,34 @@
+use quick_xml::de;
 use serde::Deserialize;
 use url::Url;
+
+use crate::error::{Error, Result};
+
+/// A parsed sitemap document, dispatched on its root element.
+pub(crate) enum Parsed {
+    Index(SitemapIndex),
+    UrlSet(UrlSet),
+}
+
+/// Parse a document strictly as a `<urlset>`, attributing any failure to `url`.
+/// Used for the children of a sitemap index, which must be url sets (Google does
+/// not allow a sitemap index to nest another index).
+pub(crate) fn parse_urlset(url: &Url, xml: &str) -> Result<UrlSet> {
+    de::from_str::<UrlSet>(xml).map_err(|source| Error::InvalidXml {
+        url: url.as_str().to_string(),
+        source,
+    })
+}
+
+/// Parse a sitemap document, dispatching on the root element: a `<sitemapindex>`
+/// becomes [`Parsed::Index`], anything else is parsed as a `<urlset>`. This never
+/// panics; malformed input yields [`Error::InvalidXml`].
+pub(crate) fn parse_sitemap(url: &Url, xml: &str) -> Result<Parsed> {
+    if let Ok(index) = de::from_str::<SitemapIndex>(xml) {
+        return Ok(Parsed::Index(index));
+    }
+    parse_urlset(url, xml).map(Parsed::UrlSet)
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename = "sitemapindex", rename_all = "lowercase")]
@@ -41,11 +70,13 @@ pub(crate) struct SitemapUrl {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::Result;
     use pretty_assertions::assert_eq;
     use quick_xml::de;
 
+    use hegel::generators;
+
     use super::*;
+    use crate::error::Result;
 
     const SITEMAP_INDEX: &str = r#"
 <?xml version="1.0" encoding="UTF-8"?>
@@ -137,5 +168,28 @@ mod tests {
             Url::parse("http://www.example.com/sitemap2.xml.gz")?
         );
         Ok(())
+    }
+
+    // `parse_sitemap` dispatches on the root element.
+    #[test]
+    fn parse_sitemap_dispatches_on_root() -> Result<()> {
+        let url = Url::parse("https://example.com/")?;
+        assert!(matches!(
+            parse_sitemap(&url, SITEMAP_INDEX)?,
+            Parsed::Index(_)
+        ));
+        assert!(matches!(
+            parse_sitemap(&url, EXAMPLE_SITEMAP)?,
+            Parsed::UrlSet(_)
+        ));
+        Ok(())
+    }
+
+    // `parse_sitemap` returns an error (never panics) on arbitrary input.
+    #[hegel::test]
+    fn parse_sitemap_never_panics(tc: hegel::TestCase) {
+        let xml = tc.draw(generators::text());
+        let url = Url::parse("https://example.com/sitemap.xml").expect("valid url");
+        let _ = parse_sitemap(&url, &xml);
     }
 }
