@@ -3,7 +3,8 @@
   "changelog": [
     "@changesets/changelog-github",
     {
-      "repo": "lukehsiao/sitemap2urllist"
+      "repo": "lukehsiao/sitemap2urllist",
+      "disableThanks": true
     }
   ],
   "commit": false,
