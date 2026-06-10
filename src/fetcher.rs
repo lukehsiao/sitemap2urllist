@@ -220,7 +220,10 @@ fn gunzip_capped(url: &Url, bytes: &[u8], limit: u64) -> Result<Vec<u8>> {
     use std::io::Read;
 
     let mut out = Vec::new();
-    flate2::read::GzDecoder::new(bytes)
+    // MultiGzDecoder, not GzDecoder: RFC 1952 allows a file to be a series of
+    // concatenated members, and decoding only the first would silently
+    // truncate the document.
+    flate2::read::MultiGzDecoder::new(bytes)
         // One byte past the limit is enough to prove the bomb; reading
         // further would buffer exactly what the cap exists to prevent.
         .take(limit.saturating_add(1))
@@ -904,6 +907,33 @@ mod tests {
         let out = super::gunzip_capped(&url, &gzip_bytes(&data), super::MAX_SITEMAP_BYTES)
             .expect("valid gzip decompresses");
         assert_eq!(out, data);
+    }
+
+    // RFC 1952 allows a gzip file to be a series of independently compressed
+    // members; tools produce them by concatenation. Decoding only the first
+    // member would silently truncate the document.
+    #[tokio::test]
+    async fn multi_member_gzip_is_fully_decompressed() {
+        let server = MockServer::start().await;
+        let xml = urlset_body("https://example.com/multi");
+        // Split the document mid-stream and compress each half as its own
+        // gzip member, the layout `cat a.gz b.gz > sitemap.xml.gz` produces.
+        let (head, tail) = xml.as_bytes().split_at(xml.len() / 2);
+        let mut gz = gzip_bytes(head);
+        gz.extend_from_slice(&gzip_bytes(tail));
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(gz))
+            .mount(&server)
+            .await;
+
+        let url = Url::parse(&server.uri()).unwrap();
+        let cache = Arc::new(Cache::new());
+        let body = url
+            .fetch(&build_client().unwrap(), &cache)
+            .await
+            .expect("fetched multi-member gzip");
+        assert_eq!(body, xml);
     }
 
     // A gzip-compressed sitemap file (sitemap.xml.gz) as a static file server
