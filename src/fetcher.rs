@@ -52,8 +52,13 @@ pub(crate) mod logic {
             last_modified: Option<String>,
             body: Option<String>,
         },
-        /// 304 with an existing entry: keep the cached body and metadata.
-        Reuse,
+        /// 304 with an existing entry: keep the cached body, refreshing the
+        /// validators with any the response carried (RFC 7232 allows a 304 to
+        /// rotate them).
+        Reuse {
+            etag: Option<String>,
+            last_modified: Option<String>,
+        },
         /// 429 with an existing entry: record the retry window and serve cache.
         RateLimited { retry_after: Span },
         /// 429 with no cached entry: there is nothing to serve.
@@ -107,7 +112,10 @@ pub(crate) mod logic {
         retry_after_header: Option<&str>,
     ) -> Disposition {
         if status == StatusCode::NOT_MODIFIED && had_cache_entry {
-            Disposition::Reuse
+            Disposition::Reuse {
+                etag: etag.map(ToString::to_string),
+                last_modified: last_modified.map(ToString::to_string),
+            }
         } else if status.is_success() || status == StatusCode::NOT_MODIFIED {
             // A 2xx, or a 304 with no prior entry, stores the response as-is.
             Disposition::Store {
@@ -167,10 +175,20 @@ fn apply_disposition(
             }
             body.ok_or_else(|| Error::EmptySitemap(url.as_str().to_string()))
         }
-        logic::Disposition::Reuse => cache
+        logic::Disposition::Reuse {
+            etag,
+            last_modified,
+        } => cache
             .get_mut(url)
             .and_then(|mut cv| {
                 cv.timestamp = now;
+                // Absent headers leave the stored validators untouched.
+                if etag.is_some() {
+                    cv.etag = etag;
+                }
+                if last_modified.is_some() {
+                    cv.last_modified = last_modified;
+                }
                 cv.body.clone()
             })
             .ok_or_else(|| Error::EmptySitemap(url.as_str().to_string())),
@@ -477,21 +495,32 @@ mod tests {
         assert_eq!(b, body);
     }
 
-    // A 304 with a cache entry reuses it; with no entry it stores the response.
+    // A 304 with a cache entry reuses it, carrying any rotated validators;
+    // with no entry it stores the response.
     #[hegel::test]
     fn disposition_not_modified_depends_on_cache(tc: hegel::TestCase) {
+        let etag = tc.draw(generators::optional(generators::text()));
+        let last_modified = tc.draw(generators::optional(generators::text()));
         let body = tc.draw(generators::optional(generators::text()));
         let had_cache_entry = tc.draw(generators::booleans());
         let disp = logic::disposition(
             StatusCode::NOT_MODIFIED,
-            None,
-            None,
+            etag.as_deref(),
+            last_modified.as_deref(),
             body.clone(),
             had_cache_entry,
             None,
         );
         if had_cache_entry {
-            assert!(matches!(disp, logic::Disposition::Reuse));
+            let logic::Disposition::Reuse {
+                etag: e,
+                last_modified: lm,
+            } = disp
+            else {
+                panic!("expected Reuse, got {disp:?}");
+            };
+            assert_eq!(e, etag);
+            assert_eq!(lm, last_modified);
         } else {
             let logic::Disposition::Store { body: b, .. } = disp else {
                 panic!("expected Store, got {disp:?}");
@@ -589,6 +618,45 @@ mod tests {
                 .unwrap(),
             last_modified
         );
+    }
+
+    // RFC 9110 allows a 304 to carry updated validators; the cache must adopt
+    // them or it keeps revalidating with stale ones the server may not honor.
+    #[tokio::test]
+    async fn rotates_validators_on_304() {
+        let server = MockServer::start().await;
+        let new_etag = normalize_etag("new-etag");
+        let new_last_modified = "Tue, 02 Jan 2024 00:00:00 GMT";
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(
+                ResponseTemplate::new(304)
+                    .append_header("etag", new_etag.as_str())
+                    .append_header("last-modified", new_last_modified),
+            )
+            .mount(&server)
+            .await;
+
+        let url = Url::parse(&server.uri()).unwrap();
+        let cache = Arc::new(Cache::new());
+        let cached_body = urlset_body("https://example.com/cached");
+        cache.insert(
+            url.clone(),
+            CacheValue {
+                timestamp: Timestamp::now(),
+                retry_after: None,
+                last_modified: Some("Mon, 01 Jan 2024 00:00:00 GMT".to_string()),
+                etag: Some(normalize_etag("old-etag")),
+                body: Some(cached_body.clone()),
+            },
+        );
+
+        let body = url.fetch(&cache).await.expect("served cache on 304");
+        assert_eq!(body, cached_body);
+
+        let entry = cache.get(&url).expect("entry present");
+        assert_eq!(entry.etag.as_deref(), Some(new_etag.as_str()));
+        assert_eq!(entry.last_modified.as_deref(), Some(new_last_modified));
     }
 
     #[tokio::test]
