@@ -4,7 +4,11 @@ pub mod error;
 pub mod fetcher;
 pub mod sitemap;
 
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::HashSet,
+    io::{self, BufWriter, Write},
+    sync::Arc,
+};
 
 use tokio::task::JoinSet;
 use tracing::debug;
@@ -29,6 +33,22 @@ fn collect_urls(urlsets: &[UrlSet]) -> Vec<String> {
     let mut urls: Vec<String> = unique.into_iter().collect();
     urls.sort_unstable();
     urls
+}
+
+/// Write the URLs to `w`, one per line.
+///
+/// A closed pipe (e.g. `sitemap2urllist ... | head`) is treated as success:
+/// the reader has everything it wants, and Unix convention is to exit quietly
+/// rather than panic the way `println!` does on EPIPE.
+fn write_urls(mut w: impl Write, urls: &[String]) -> Result<()> {
+    let written = urls
+        .iter()
+        .try_for_each(|url| writeln!(w, "{url}"))
+        .and_then(|()| w.flush());
+    match written {
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        result => Ok(result?),
+    }
 }
 
 async fn get_urlsets(url: &Url, cache: &Arc<Cache>) -> Result<Vec<UrlSet>> {
@@ -61,9 +81,6 @@ pub async fn run(args: Args) -> Result<()> {
     let cache = Arc::new(cache);
 
     let urlsets = get_urlsets(&args.url, &cache).await?;
-    for url in collect_urls(&urlsets) {
-        println!("{url}");
-    }
 
     if let Some(cache_path) = cache::get_cache_path()
         && !args.no_cache
@@ -71,7 +88,9 @@ pub async fn run(args: Args) -> Result<()> {
         cache.store(cache_path)?;
     }
 
-    Ok(())
+    // Stdout is line-buffered, so a large sitemap would otherwise pay one
+    // write syscall per URL; the BufWriter batches them.
+    write_urls(BufWriter::new(io::stdout().lock()), &collect_urls(&urlsets))
 }
 
 #[cfg(test)]
@@ -83,11 +102,54 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::cache::Cache;
+    use crate::error::Error;
     use crate::sitemap::{SitemapUrl, UrlSet};
 
-    use super::{collect_urls, get_urlsets};
+    use super::{collect_urls, get_urlsets, write_urls};
     use std::sync::Arc;
     use url::Url;
+
+    // A writer that always fails with the given kind, standing in for a stdout
+    // that has gone away.
+    struct FailingWriter(std::io::ErrorKind);
+
+    impl std::io::Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(self.0, "stub failure"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn write_urls_writes_one_per_line() {
+        let mut buf = Vec::new();
+        write_urls(
+            &mut buf,
+            &[
+                "https://a.example/".to_string(),
+                "https://b.example/".to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(buf, b"https://a.example/\nhttps://b.example/\n");
+    }
+
+    #[test]
+    fn write_urls_treats_broken_pipe_as_success() {
+        let urls = vec!["https://a.example/".to_string()];
+        assert!(write_urls(FailingWriter(std::io::ErrorKind::BrokenPipe), &urls).is_ok());
+    }
+
+    #[test]
+    fn write_urls_propagates_other_io_errors() {
+        let urls = vec!["https://a.example/".to_string()];
+        assert!(matches!(
+            write_urls(FailingWriter(std::io::ErrorKind::PermissionDenied), &urls),
+            Err(Error::Io(_))
+        ));
+    }
 
     fn urlset_from(urls: &[Url]) -> UrlSet {
         UrlSet {
