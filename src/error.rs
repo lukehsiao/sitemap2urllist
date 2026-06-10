@@ -15,6 +15,10 @@ pub enum Error {
     #[diagnostic(code(sitemap2urllist::rate_limit))]
     RateLimit(String),
 
+    #[error("the sitemap at `{url}` is too large ({bytes} bytes).")]
+    #[diagnostic(code(sitemap2urllist::sitemap_too_large))]
+    SitemapTooLarge { url: String, bytes: u64 },
+
     #[error("`{url}` received an unexpected status (HTTP {status}).")]
     #[diagnostic(code(sitemap2urllist::unexpected_status))]
     UnexpectedStatus { url: String, status: String },

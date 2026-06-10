@@ -2004,6 +2004,7 @@ dependencies = [
  "dashmap",
  "directories",
  "hegeltest",
+ "http",
  "humantime",
  "jiff",
  "log",

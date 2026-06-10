@@ -13,6 +13,11 @@ use crate::{
     error::{Error, Result},
 };
 
+/// Reject sitemaps past this size. The protocol caps a sitemap file at 50MB
+/// uncompressed; 64 MiB leaves headroom for sloppy generators without letting
+/// a hostile server buffer us into the ground.
+const MAX_SITEMAP_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Build the HTTP client every fetch in a run shares. One client means one
 /// connection pool, so the children of a sitemap index (typically all on the
 /// same host) reuse connections instead of each paying a fresh TLS handshake.
@@ -175,6 +180,33 @@ pub(crate) mod logic {
     }
 }
 
+/// Read the response body, failing once it grows past `limit` bytes. This
+/// backstops the Content-Length check for chunked or compressed responses,
+/// which present no usable length up front. A transfer error mid-read fails
+/// the fetch with the underlying cause and leaves the cache untouched.
+async fn read_body_capped(url: &Url, mut resp: reqwest::Response, limit: u64) -> Result<String> {
+    // The limit always fits in usize on supported platforms.
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    let mut body = Vec::new();
+    loop {
+        match resp.chunk().await? {
+            Some(chunk) => {
+                let total = body.len().saturating_add(chunk.len());
+                if total > limit {
+                    return Err(Error::SitemapTooLarge {
+                        url: url.as_str().to_string(),
+                        bytes: u64::try_from(total).unwrap_or(u64::MAX),
+                    });
+                }
+                body.extend_from_slice(&chunk);
+            }
+            // The sitemap protocol requires UTF-8, so a lossy conversion only
+            // mangles documents that were already out of spec.
+            None => return Ok(String::from_utf8_lossy(&body).into_owned()),
+        }
+    }
+}
+
 /// Apply a decided [`logic::Disposition`] to the cache and return the sitemap body
 /// to serve, or a terminal error. This is the write half of a fetch; the decision
 /// is made purely in [`logic::disposition`].
@@ -290,8 +322,20 @@ impl Fetcher for Url {
         };
         debug!(url=%self, response=?resp, "received response");
 
+        // Reject grossly oversized responses before buffering them. Responses
+        // that arrive compressed or chunked report no length and are bounded
+        // by the capped read instead.
+        if let Some(bytes) = resp.content_length()
+            && bytes > MAX_SITEMAP_BYTES
+        {
+            return Err(Error::SitemapTooLarge {
+                url: self.as_str().to_string(),
+                bytes,
+            });
+        }
+
         // Pull the plain values the decision logic needs out of the response before
-        // `text()` consumes it. The etag is normalized at this boundary.
+        // reading the body consumes it. The etag is normalized at this boundary.
         let status = resp.status();
         let etag = resp
             .headers()
@@ -309,7 +353,7 @@ impl Fetcher for Url {
             .and_then(|v| v.to_str().ok())
             .map(str::to_string);
         let body = if status.is_success() || status == StatusCode::NOT_MODIFIED {
-            resp.text().await.ok()
+            Some(read_body_capped(self, resp, MAX_SITEMAP_BYTES).await?)
         } else {
             None
         };
@@ -781,6 +825,43 @@ mod tests {
             Some(normalize_etag(etag_raw).as_str())
         );
         assert_eq!(entry.last_modified.as_deref(), Some(last_modified));
+    }
+
+    #[tokio::test]
+    async fn streamed_bodies_without_content_length_are_capped() {
+        use super::{MAX_SITEMAP_BYTES, read_body_capped};
+
+        // A response with no Content-Length header, the shape a chunked or
+        // compressed transfer takes once reqwest strips the encoding. The
+        // header fast-path cannot see these; only the streaming cap can.
+        let big = vec![b'x'; usize::try_from(MAX_SITEMAP_BYTES).unwrap() + 1];
+        let resp = reqwest::Response::from(http::Response::new(big));
+        let url = Url::parse("https://example.com/sitemap.xml").unwrap();
+
+        let res = read_body_capped(&url, resp, MAX_SITEMAP_BYTES).await;
+        assert!(matches!(res, Err(Error::SitemapTooLarge { .. })));
+    }
+
+    #[tokio::test]
+    async fn oversized_sitemaps_are_rejected_without_buffering() {
+        let server = MockServer::start().await;
+        // A valid sitemap padded past the size limit, standing in for a URL
+        // that points at a video or other huge file.
+        let padding = format!("<!-- {} -->", "x".repeat(65 * 1024 * 1024));
+        let body = urlset_body("https://example.com/huge")
+            .replace("</urlset>", &format!("{padding}</urlset>"));
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let url = Url::parse(&server.uri()).unwrap();
+        let cache = Arc::new(Cache::new());
+        let res = url.fetch(&build_client().unwrap(), &cache).await;
+        assert!(matches!(res, Err(Error::SitemapTooLarge { .. })));
+        // Nothing that big belongs in the cache either.
+        assert!(!cache.contains_key(&url));
     }
 
     #[tokio::test]
