@@ -13,6 +13,16 @@ use crate::{
     error::{Error, Result},
 };
 
+/// Build the HTTP client every fetch in a run shares. One client means one
+/// connection pool, so the children of a sitemap index (typically all on the
+/// same host) reuse connections instead of each paying a fresh TLS handshake.
+pub(crate) fn build_client() -> Result<Client> {
+    Ok(ClientBuilder::new()
+        .timeout(Duration::from_secs(30))
+        .user_agent(concat!(crate_name!(), '/', crate_version!()))
+        .build()?)
+}
+
 /// Normalize an etag so it carries the literal double quotes HTTP requires.
 #[must_use]
 pub fn normalize_etag(s: &str) -> String {
@@ -230,19 +240,14 @@ fn apply_disposition(
 
 pub(crate) trait Fetcher {
     /// Fetch a sitemap document, returning its raw body.
-    async fn fetch(&self, cache: &Arc<Cache>) -> Result<String>;
+    async fn fetch(&self, client: &Client, cache: &Arc<Cache>) -> Result<String>;
 }
 
 impl Fetcher for Url {
-    async fn fetch(&self, cache: &Arc<Cache>) -> Result<String> {
+    async fn fetch(&self, client: &Client, cache: &Arc<Cache>) -> Result<String> {
         // Capture the clock once so every timestamp written during this call agrees
         // and so the decision logic can be exercised deterministically.
         let now = Timestamp::now();
-
-        let client: Client = ClientBuilder::new()
-            .timeout(Duration::from_secs(30))
-            .user_agent(concat!(crate_name!(), '/', crate_version!()))
-            .build()?;
 
         // Snapshot the entry by value so no DashMap guard is held across an await
         // point; concurrent fetches share the map through a JoinSet.
@@ -332,7 +337,7 @@ mod tests {
     use crate::cache::{Cache, CacheValue, MAX_SPAN_SEC};
     use crate::error::Error;
 
-    use super::{Fetcher, logic, normalize_etag};
+    use super::{Fetcher, build_client, logic, normalize_etag};
 
     // Bounds for gate timestamps/spans. 50e9 seconds is ~1585 years past the
     // epoch; a timestamp plus a span stays under jiff's Timestamp::MAX, while
@@ -674,7 +679,10 @@ mod tests {
             },
         );
 
-        let body = url.fetch(&cache).await.expect("served cache on 304");
+        let body = url
+            .fetch(&build_client().unwrap(), &cache)
+            .await
+            .expect("served cache on 304");
         assert_eq!(body, cached_body);
 
         let received = server.received_requests().await.unwrap();
@@ -724,7 +732,10 @@ mod tests {
             },
         );
 
-        let body = url.fetch(&cache).await.expect("served cache on 304");
+        let body = url
+            .fetch(&build_client().unwrap(), &cache)
+            .await
+            .expect("served cache on 304");
         assert_eq!(body, cached_body);
 
         let entry = cache.get(&url).expect("entry present");
@@ -752,7 +763,10 @@ mod tests {
         let url = Url::parse(&server.uri()).unwrap();
         let cache = Arc::new(Cache::new());
 
-        let body = url.fetch(&cache).await.expect("fetched fresh sitemap");
+        let body = url
+            .fetch(&build_client().unwrap(), &cache)
+            .await
+            .expect("fetched fresh sitemap");
         assert_eq!(body, fresh_body);
 
         let entry = cache.get(&url).expect("cached after 200");
@@ -779,15 +793,16 @@ mod tests {
 
         let url = Url::parse(&server.uri()).unwrap();
         let cache = Arc::new(Cache::new());
+        let client = build_client().unwrap();
 
-        let first = url.fetch(&cache).await;
+        let first = url.fetch(&client, &cache).await;
         assert!(matches!(first, Err(Error::EmptySitemap(_))));
 
         // The cached entry must not pretend to have something to serve. If it
         // did, the next fetch would send If-None-Match, the server would say
         // 304, and the run would serve the empty body until the entry aged
         // out of the cache.
-        let second = url.fetch(&cache).await;
+        let second = url.fetch(&client, &cache).await;
         assert!(matches!(second, Err(Error::EmptySitemap(_))));
 
         let received = server.received_requests().await.unwrap();
@@ -835,7 +850,7 @@ mod tests {
         );
 
         let body = url
-            .fetch(&cache)
+            .fetch(&build_client().unwrap(), &cache)
             .await
             .expect("refetched the sitemap instead of erroring on 304");
         assert_eq!(body, fresh_body);
@@ -866,7 +881,10 @@ mod tests {
             },
         );
 
-        let body = url.fetch(&cache).await.expect("served cache on 429");
+        let body = url
+            .fetch(&build_client().unwrap(), &cache)
+            .await
+            .expect("served cache on 429");
         assert_eq!(body, cached_body);
         let entry = cache.get(&url).expect("entry present");
         assert_eq!(entry.retry_after.unwrap().get_seconds(), 120);
@@ -883,7 +901,7 @@ mod tests {
 
         let url = Url::parse(&server.uri()).unwrap();
         let cache = Arc::new(Cache::new());
-        let res = url.fetch(&cache).await;
+        let res = url.fetch(&build_client().unwrap(), &cache).await;
         assert!(matches!(res, Err(Error::UnexpectedStatus { .. })));
     }
 }

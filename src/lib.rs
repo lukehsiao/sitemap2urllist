@@ -10,6 +10,7 @@ use std::{
     sync::Arc,
 };
 
+use reqwest::Client;
 use tokio::task::JoinSet;
 use tracing::debug;
 use url::Url;
@@ -51,8 +52,8 @@ fn write_urls(mut w: impl Write, urls: &[String]) -> Result<()> {
     }
 }
 
-async fn get_urlsets(url: &Url, cache: &Arc<Cache>) -> Result<Vec<UrlSet>> {
-    let body = url.fetch(cache).await?;
+async fn get_urlsets(url: &Url, client: &Client, cache: &Arc<Cache>) -> Result<Vec<UrlSet>> {
+    let body = url.fetch(client, cache).await?;
 
     // Google enforces that sitemap indexes cannot contain other sitemap indices,
     // so we don't go deeper than 1 level: a sitemap index's children are fetched
@@ -62,8 +63,11 @@ async fn get_urlsets(url: &Url, cache: &Arc<Cache>) -> Result<Vec<UrlSet>> {
             let mut tasks = JoinSet::new();
             for ptr in index.sitemaps {
                 let cache = cache.clone();
+                // reqwest clients are a handle on a shared pool, so the clone
+                // keeps connection reuse across tasks.
+                let client = client.clone();
                 tasks.spawn(async move {
-                    let body = ptr.location.fetch(&cache).await?;
+                    let body = ptr.location.fetch(&client, &cache).await?;
                     parse_urlset(&ptr.location, &body)
                 });
             }
@@ -80,7 +84,8 @@ pub async fn run(args: Args) -> Result<()> {
     let cache = cache::load_cache(&args, CachePath::Default).unwrap_or_default();
     let cache = Arc::new(cache);
 
-    let urlsets = get_urlsets(&args.url, &cache).await?;
+    let client = fetcher::build_client()?;
+    let urlsets = get_urlsets(&args.url, &client, &cache).await?;
 
     cache::store_cache(&cache, args.no_cache, CachePath::Default);
 
@@ -102,6 +107,7 @@ mod tests {
     use crate::sitemap::{SitemapUrl, UrlSet};
 
     use super::{collect_urls, get_urlsets, write_urls};
+    use crate::fetcher::build_client;
     use std::sync::Arc;
     use url::Url;
 
@@ -262,7 +268,7 @@ mod tests {
 
         let index_url = Url::parse(&format!("{}/sitemap-index.xml", server.uri())).unwrap();
         let cache = Arc::new(Cache::new());
-        let urlsets = get_urlsets(&index_url, &cache)
+        let urlsets = get_urlsets(&index_url, &build_client().unwrap(), &cache)
             .await
             .expect("fetched index and children");
         let urls = collect_urls(&urlsets);
@@ -293,7 +299,9 @@ mod tests {
 
         let url = Url::parse(&format!("{}/sitemap.xml", server.uri())).unwrap();
         let cache = Arc::new(Cache::new());
-        let urlsets = get_urlsets(&url, &cache).await.expect("fetched url set");
+        let urlsets = get_urlsets(&url, &build_client().unwrap(), &cache)
+            .await
+            .expect("fetched url set");
         let urls = collect_urls(&urlsets);
 
         assert_eq!(
