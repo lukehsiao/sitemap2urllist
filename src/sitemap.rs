@@ -308,6 +308,60 @@ mod tests {
         Ok(())
     }
 
+    // Windows generators prepend a UTF-8 BOM; quick-xml tolerates it and the
+    // root-name dispatch must too.
+    #[test]
+    fn bom_prefixed_sitemap_parses() -> Result<()> {
+        let url = Url::parse("https://example.com/sitemap.xml")?;
+        let xml = format!(
+            "\u{feff}{}",
+            r#"<?xml version="1.0"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://example.com/a</loc></url>
+</urlset>"#
+        );
+        let urlset = parse_urlset(&url, &xml)?;
+        assert_eq!(urlset.urls.len(), 1);
+        Ok(())
+    }
+
+    // Pretty-printers put <loc> values on their own padded line; the url
+    // crate strips the surrounding whitespace when parsing.
+    #[test]
+    fn whitespace_padded_loc_parses() -> Result<()> {
+        let url = Url::parse("https://example.com/sitemap.xml")?;
+        let xml = r#"<?xml version="1.0"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>
+      https://example.com/padded
+    </loc>
+  </url>
+</urlset>"#;
+        let urlset = parse_urlset(&url, xml)?;
+        assert_eq!(
+            urlset.urls[0].location,
+            Url::parse("https://example.com/padded")?
+        );
+        Ok(())
+    }
+
+    // quick-xml matches local names, so a namespace-prefixed sitemap parses
+    // and the prefix-stripping in root_element_name agrees with it.
+    #[test]
+    fn namespace_prefixed_sitemap_parses() -> Result<()> {
+        let url = Url::parse("https://example.com/sitemap.xml")?;
+        let xml = r#"<?xml version="1.0"?>
+<sm:urlset xmlns:sm="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sm:url><sm:loc>https://example.com/a</sm:loc></sm:url>
+</sm:urlset>"#;
+        let Parsed::UrlSet(urlset) = parse_sitemap(&url, xml)? else {
+            panic!("expected UrlSet");
+        };
+        assert_eq!(urlset.urls.len(), 1);
+        Ok(())
+    }
+
     // An HTML error page served with a 200 must stay an error, not become an
     // empty sitemap that silently prints nothing.
     #[test]
