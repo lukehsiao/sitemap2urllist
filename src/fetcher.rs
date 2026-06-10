@@ -300,7 +300,7 @@ impl Fetcher for Url {
             if let Some(body) = &cv.body {
                 return Ok(body.clone());
             }
-            warn!(url=%self.as_str(), "empty sitemap");
+            debug!(url=%self.as_str(), "retry window open but nothing cached; fetching anyway");
         }
 
         let mut req = client.get(self.as_str());
@@ -321,6 +321,16 @@ impl Fetcher for Url {
             }
         };
         debug!(url=%self, response=?resp, "received response");
+
+        // reqwest follows redirects silently, so a moved sitemap keeps working
+        // and the user never learns they should update the URL.
+        if resp.url() != self {
+            warn!(
+                from=%self.as_str(),
+                to=%resp.url().as_str(),
+                "sitemap URL redirects; consider updating it"
+            );
+        }
 
         // Reject grossly oversized responses before buffering them. Responses
         // that arrive compressed or chunked report no length and are bounded
@@ -975,6 +985,36 @@ mod tests {
         assert_eq!(body, cached_body);
         let entry = cache.get(&url).expect("entry present");
         assert_eq!(entry.retry_after.unwrap().get_seconds(), 120);
+    }
+
+    // A redirected sitemap is still fetched and cached under the original URL,
+    // so the conditional-request state survives the move.
+    #[tokio::test]
+    async fn redirected_sitemap_is_fetched_and_cached_under_original_url() {
+        let server = MockServer::start().await;
+        let fresh_body = urlset_body("https://example.com/moved");
+        Mock::given(method("GET"))
+            .and(path("/old.xml"))
+            .respond_with(ResponseTemplate::new(301).append_header("location", "/new.xml"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/new.xml"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(fresh_body.clone()))
+            .mount(&server)
+            .await;
+
+        let url = Url::parse(&format!("{}/old.xml", server.uri())).unwrap();
+        let cache = Arc::new(Cache::new());
+        let body = url
+            .fetch(&build_client().unwrap(), &cache)
+            .await
+            .expect("followed redirect");
+        assert_eq!(body, fresh_body);
+        assert!(
+            cache.contains_key(&url),
+            "cached under the URL the user gave"
+        );
     }
 
     #[tokio::test]
