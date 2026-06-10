@@ -169,14 +169,10 @@ mod tests {
 
     fn urlset_from(urls: &[Url]) -> UrlSet {
         UrlSet {
-            _xmlns: String::new(),
             urls: urls
                 .iter()
                 .map(|location| SitemapUrl {
                     location: location.clone(),
-                    _last_modified: None,
-                    _change_frequency: None,
-                    _priority: None,
                 })
                 .collect(),
         }

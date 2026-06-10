@@ -1,5 +1,6 @@
-use quick_xml::de;
+use quick_xml::{de, events::Event};
 use serde::Deserialize;
+use serde::de::Error as _;
 use url::Url;
 
 use crate::error::{Error, Result};
@@ -10,10 +11,46 @@ pub(crate) enum Parsed {
     UrlSet(UrlSet),
 }
 
+/// The local name of the document's root element, if it has one. Namespace
+/// prefixes are stripped, so `<ns:urlset>` reads as `urlset`.
+fn root_element_name(xml: &str) -> Option<String> {
+    let mut reader = quick_xml::Reader::from_str(xml);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(start) | Event::Empty(start)) => {
+                return Some(String::from_utf8_lossy(start.local_name().as_ref()).into_owned());
+            }
+            Ok(Event::Eof) | Err(_) => return None,
+            _ => {}
+        }
+    }
+}
+
+/// Error unless the document's root element is `expected`. The entry vectors
+/// default to empty, so without this check almost any XML (say, an HTML error
+/// page served with a 200) would deserialize as an empty sitemap and silently
+/// print nothing; the root name is what tells them apart.
+fn expect_root(url: &Url, xml: &str, expected: &str) -> Result<()> {
+    match root_element_name(xml) {
+        Some(name) if name == expected => Ok(()),
+        Some(name) => Err(Error::InvalidXml {
+            url: url.as_str().to_string(),
+            source: quick_xml::DeError::custom(format!(
+                "unexpected root element <{name}>, expected <{expected}>"
+            )),
+        }),
+        None => Err(Error::InvalidXml {
+            url: url.as_str().to_string(),
+            source: quick_xml::DeError::custom("document has no root element"),
+        }),
+    }
+}
+
 /// Parse a document strictly as a `<urlset>`, attributing any failure to `url`.
 /// Used for the children of a sitemap index, which must be url sets (Google does
 /// not allow a sitemap index to nest another index).
 pub(crate) fn parse_urlset(url: &Url, xml: &str) -> Result<UrlSet> {
+    expect_root(url, xml, "urlset")?;
     de::from_str::<UrlSet>(xml).map_err(|source| Error::InvalidXml {
         url: url.as_str().to_string(),
         source,
@@ -24,18 +61,26 @@ pub(crate) fn parse_urlset(url: &Url, xml: &str) -> Result<UrlSet> {
 /// becomes [`Parsed::Index`], anything else is parsed as a `<urlset>`. This never
 /// panics; malformed input yields [`Error::InvalidXml`].
 pub(crate) fn parse_sitemap(url: &Url, xml: &str) -> Result<Parsed> {
-    if let Ok(index) = de::from_str::<SitemapIndex>(xml) {
-        return Ok(Parsed::Index(index));
+    if root_element_name(xml).as_deref() == Some("sitemapindex") {
+        return de::from_str::<SitemapIndex>(xml)
+            .map(Parsed::Index)
+            .map_err(|source| Error::InvalidXml {
+                url: url.as_str().to_string(),
+                source,
+            });
     }
     parse_urlset(url, xml).map(Parsed::UrlSet)
 }
 
+// Only <loc> is deserialized from sitemap entries. The optional fields the
+// protocol defines (lastmod, changefreq, priority) are unused here, and
+// leaving them out of the model means junk inside them (an empty <priority>,
+// a malformed date) cannot fail a parse.
+
 #[derive(Debug, Deserialize)]
 #[serde(rename = "sitemapindex", rename_all = "lowercase")]
 pub(crate) struct SitemapIndex {
-    #[serde(rename = "@xmlns")]
-    pub(crate) _xmlns: String,
-    #[serde(rename = "sitemap")]
+    #[serde(rename = "sitemap", default)]
     pub(crate) sitemaps: Vec<SitemapPtr>,
 }
 
@@ -43,16 +88,12 @@ pub(crate) struct SitemapIndex {
 pub(crate) struct SitemapPtr {
     #[serde(rename = "loc")]
     pub(crate) location: Url,
-    #[serde(rename = "lastmod")]
-    pub(crate) _last_modified: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename = "urlset", rename_all = "lowercase")]
 pub(crate) struct UrlSet {
-    #[serde(rename = "@xmlns")]
-    pub(crate) _xmlns: String,
-    #[serde(rename = "url")]
+    #[serde(rename = "url", default)]
     pub(crate) urls: Vec<SitemapUrl>,
 }
 
@@ -60,12 +101,6 @@ pub(crate) struct UrlSet {
 pub(crate) struct SitemapUrl {
     #[serde(rename = "loc")]
     pub(crate) location: Url,
-    #[serde(rename = "lastmod")]
-    pub(crate) _last_modified: Option<String>,
-    #[serde(rename = "changefreq")]
-    pub(crate) _change_frequency: Option<String>,
-    #[serde(rename = "priority")]
-    pub(crate) _priority: Option<f64>,
 }
 
 #[cfg(test)]
@@ -191,5 +226,110 @@ mod tests {
         let xml = tc.draw(generators::text());
         let url = Url::parse("https://example.com/sitemap.xml").expect("valid url");
         let _ = parse_sitemap(&url, &xml);
+    }
+
+    // Rendering a urlset and parsing it back yields exactly the input
+    // locations, including URLs whose query strings need XML escaping.
+    #[hegel::test]
+    fn urlset_round_trips_locations(tc: hegel::TestCase) {
+        let urls: Vec<Url> = tc
+            .draw(generators::vecs(
+                generators::from_regex(
+                    r"https?://[a-z]{1,8}\.[a-z]{2,4}/[a-z]{0,8}(\?[a-z]{1,3}=[a-z]{1,3}(&[a-z]{1,3}=[a-z]{1,3}){0,2})?",
+                )
+                .fullmatch(true),
+            ))
+            .into_iter()
+            .map(|s| Url::parse(&s).expect("generated string is a valid URL"))
+            .collect();
+        let entries: String = urls.iter().fold(String::new(), |mut acc, u| {
+            acc.push_str("<url><loc>");
+            acc.push_str(&u.as_str().replace('&', "&amp;"));
+            acc.push_str("</loc></url>");
+            acc
+        });
+        let xml = format!(
+            r#"<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{entries}</urlset>"#
+        );
+        let sitemap_url = Url::parse("https://example.com/sitemap.xml").expect("valid url");
+        let parsed = parse_urlset(&sitemap_url, &xml).expect("rendered urlset parses");
+        let got: Vec<&str> = parsed.urls.iter().map(|u| u.location.as_str()).collect();
+        let want: Vec<&str> = urls.iter().map(Url::as_str).collect();
+        assert_eq!(got, want);
+    }
+
+    // The optional per-URL fields (lastmod, changefreq, priority) are unused,
+    // so junk inside them must not be able to fail the run. Sloppy generators
+    // emit empty or non-numeric <priority> elements in the wild.
+    #[test]
+    fn junk_optional_fields_do_not_fail_parse() -> Result<()> {
+        let url = Url::parse("https://example.com/sitemap.xml")?;
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+   <url>
+      <loc>https://example.com/a</loc>
+      <priority></priority>
+   </url>
+   <url>
+      <loc>https://example.com/b</loc>
+      <lastmod>not-a-date</lastmod>
+      <priority>high</priority>
+   </url>
+</urlset>"#;
+        let urlset = parse_urlset(&url, xml)?;
+        assert_eq!(urlset.urls.len(), 2);
+        Ok(())
+    }
+
+    // Generators emit empty url sets for brand-new sites. The XSD technically
+    // requires at least one <url>, but rejecting an empty sitemap helps nobody:
+    // zero URLs is the honest answer.
+    #[test]
+    fn empty_urlset_parses_to_zero_urls() -> Result<()> {
+        let url = Url::parse("https://example.com/sitemap.xml")?;
+        for xml in [
+            r#"<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>"#,
+            r#"<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"/>"#,
+        ] {
+            let urlset = parse_urlset(&url, xml)?;
+            assert!(urlset.urls.is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn empty_sitemapindex_parses_to_zero_children() -> Result<()> {
+        let url = Url::parse("https://example.com/sitemap.xml")?;
+        let xml = r#"<?xml version="1.0"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></sitemapindex>"#;
+        let Parsed::Index(index) = parse_sitemap(&url, xml)? else {
+            panic!("expected Index");
+        };
+        assert!(index.sitemaps.is_empty());
+        Ok(())
+    }
+
+    // An HTML error page served with a 200 must stay an error, not become an
+    // empty sitemap that silently prints nothing.
+    #[test]
+    fn html_document_is_an_error() {
+        let url = Url::parse("https://example.com/sitemap.xml").unwrap();
+        let html = "<html><body><h1>404 Not Found</h1></body></html>";
+        assert!(parse_sitemap(&url, html).is_err());
+        assert!(parse_urlset(&url, html).is_err());
+    }
+
+    // A sitemap index nested as the child of another index is rejected by
+    // parse_urlset (Google forbids nesting), not treated as an empty url set.
+    #[test]
+    fn parse_urlset_rejects_sitemapindex_root() {
+        let url = Url::parse("https://example.com/sitemap.xml").unwrap();
+        assert!(parse_urlset(&url, SITEMAP_INDEX).is_err());
+    }
+
+    #[test]
+    fn empty_document_is_an_error() {
+        let url = Url::parse("https://example.com/sitemap.xml").unwrap();
+        assert!(parse_sitemap(&url, "").is_err());
+        assert!(parse_urlset(&url, "").is_err());
     }
 }
