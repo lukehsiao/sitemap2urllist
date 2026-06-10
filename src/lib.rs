@@ -16,7 +16,7 @@ use url::Url;
 
 use crate::{
     args::Args,
-    cache::{Cache, CachePath, StoreExt},
+    cache::{Cache, CachePath},
     error::Result,
     fetcher::Fetcher,
     sitemap::{Parsed, UrlSet, parse_sitemap, parse_urlset},
@@ -82,11 +82,7 @@ pub async fn run(args: Args) -> Result<()> {
 
     let urlsets = get_urlsets(&args.url, &cache).await?;
 
-    if let Some(cache_path) = cache::get_cache_path()
-        && !args.no_cache
-    {
-        cache.store(cache_path)?;
-    }
+    cache::store_cache(&cache, args.no_cache, CachePath::Default);
 
     // Stdout is line-buffered, so a large sitemap would otherwise pay one
     // write syscall per URL; the BufWriter batches them.
