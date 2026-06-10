@@ -91,8 +91,13 @@ async fn get_urlsets(url: &Url, client: &Client, cache: &Arc<Cache>) -> Result<V
     }
 }
 
-#[allow(clippy::missing_panics_doc)]
-#[allow(clippy::missing_errors_doc)]
+/// Fetch the sitemap at `args.url`, following one level of sitemap-index
+/// nesting, and print the deduplicated, sorted URLs to stdout.
+///
+/// # Errors
+///
+/// Returns an error when any sitemap cannot be fetched or parsed, or when
+/// writing to stdout fails for any reason other than a closed pipe.
 pub async fn run(args: Args) -> Result<()> {
     debug!(?args);
     let cache = cache::load_cache(&args, CachePath::Default).unwrap_or_default();
