@@ -11,7 +11,7 @@ use std::{
 };
 
 use reqwest::Client;
-use tokio::task::JoinSet;
+use tokio::{sync::Semaphore, task::JoinSet};
 use tracing::debug;
 use url::Url;
 
@@ -22,6 +22,12 @@ use crate::{
     fetcher::Fetcher,
     sitemap::{Parsed, UrlSet, parse_sitemap, parse_urlset},
 };
+
+/// Cap on in-flight fetches so a huge sitemap index cannot exhaust the
+/// process's file descriptors (macOS defaults to 256 per process, and the
+/// sitemap spec allows 50,000 children per index). 32 keeps the network
+/// saturated while staying well below that floor.
+const MAX_CONCURRENT_FETCHES: usize = 32;
 
 /// Collect every URL location from all the `UrlSet`s, deduplicated and sorted so
 /// the output is deterministic across runs (the input order from concurrent
@@ -60,13 +66,21 @@ async fn get_urlsets(url: &Url, client: &Client, cache: &Arc<Cache>) -> Result<V
     // concurrently and parsed strictly as url sets.
     match parse_sitemap(url, &body)? {
         Parsed::Index(index) => {
+            let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_FETCHES));
             let mut tasks = JoinSet::new();
             for ptr in index.sitemaps {
                 let cache = cache.clone();
                 // reqwest clients are a handle on a shared pool, so the clone
                 // keeps connection reuse across tasks.
                 let client = client.clone();
+                let semaphore = Arc::clone(&semaphore);
                 tasks.spawn(async move {
+                    // acquire_owned errors only when the semaphore is closed,
+                    // and nothing here closes it.
+                    let _permit = semaphore
+                        .acquire_owned()
+                        .await
+                        .expect("semaphore is never closed");
                     let body = ptr.location.fetch(&client, &cache).await?;
                     parse_urlset(&ptr.location, &body)
                 });
