@@ -12,7 +12,7 @@ use std::{
 
 use reqwest::Client;
 use tokio::{sync::Semaphore, task::JoinSet};
-use tracing::debug;
+use tracing::{debug, warn};
 use url::Url;
 
 use crate::{
@@ -108,9 +108,16 @@ pub async fn run(args: Args) -> Result<()> {
 
     cache::store_cache(&cache, args.no_cache, CachePath::Default);
 
+    let urls = collect_urls(&urlsets);
+    // An empty sitemap parses cleanly, so without this a zero-URL run is
+    // indistinguishable from success with output swallowed somewhere.
+    if urls.is_empty() {
+        warn!(url=%args.url, "the sitemap contained no URLs");
+    }
+
     // Stdout is line-buffered, so a large sitemap would otherwise pay one
     // write syscall per URL; the BufWriter batches them.
-    write_urls(BufWriter::new(io::stdout().lock()), &collect_urls(&urlsets))
+    write_urls(BufWriter::new(io::stdout().lock()), &urls)
 }
 
 #[cfg(test)]
