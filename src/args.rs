@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use clap::{Parser, builder::ValueHint};
-use clap_verbosity_flag::Verbosity;
+use clap_verbosity_flag::{Verbosity, WarnLevel};
 use url::Url;
 
 #[derive(Parser, Debug)]
@@ -26,7 +26,7 @@ pub struct Args {
     )]
     pub max_cache_age: Duration,
     #[clap(flatten)]
-    pub verbose: Verbosity,
+    pub verbose: Verbosity<WarnLevel>,
 }
 
 #[cfg(test)]
@@ -51,5 +51,18 @@ mod test {
     fn verify_app() {
         use clap::CommandFactory;
         Args::command().debug_assert();
+    }
+
+    // Warnings (redirects, cache write failures, stale caches) must be visible
+    // without any -v flags; they tell the user something needs attention.
+    #[test]
+    fn warnings_are_visible_by_default() {
+        use clap::Parser;
+        let args = Args::try_parse_from(["sitemap2urllist", "https://example.com/sitemap.xml"])
+            .expect("minimal args parse");
+        assert_eq!(
+            args.verbose.log_level_filter(),
+            clap_verbosity_flag::log::LevelFilter::Warn
+        );
     }
 }
