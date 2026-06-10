@@ -83,11 +83,15 @@ pub(crate) mod logic {
     }
 
     /// The conditional-request headers implied by a cached entry, if any.
+    ///
+    /// An entry without a body sends none: a 304 answer would leave nothing
+    /// to serve, so the request must go out unconditional.
     pub(crate) fn conditional_headers(cv: Option<&CacheValue>) -> ConditionalHeaders {
-        cv.map_or_else(ConditionalHeaders::default, |cv| ConditionalHeaders {
-            if_modified_since: cv.last_modified.clone(),
-            if_none_match: cv.etag.clone(),
-        })
+        cv.filter(|cv| cv.body.is_some())
+            .map_or_else(ConditionalHeaders::default, |cv| ConditionalHeaders {
+                if_modified_since: cv.last_modified.clone(),
+                if_none_match: cv.etag.clone(),
+            })
     }
 
     /// Parse a `Retry-After` header into a `Span`, defaulting to 4 hours when it is
@@ -117,11 +121,14 @@ pub(crate) mod logic {
                 last_modified: last_modified.map(ToString::to_string),
             }
         } else if status.is_success() || status == StatusCode::NOT_MODIFIED {
-            // A 2xx, or a 304 with no prior entry, stores the response as-is.
+            // A 2xx, or a 304 with no prior entry, stores the response. An
+            // empty body counts as no body: caching it as servable would make
+            // later runs send conditional requests, get 304s, and serve the
+            // empty sitemap until the entry expired.
             Disposition::Store {
                 etag: etag.map(ToString::to_string),
                 last_modified: last_modified.map(ToString::to_string),
-                body,
+                body: body.filter(|b| !b.is_empty()),
             }
         } else if status == StatusCode::TOO_MANY_REQUESTS {
             if had_cache_entry {
@@ -449,22 +456,22 @@ mod tests {
         assert!(!logic::retry_after_gate_open(&cv, now));
     }
 
-    // Conditional headers are exactly the cached etag and last-modified values.
+    // Conditional headers are exactly the cached etag and last-modified
+    // values when the entry has a body to serve, and absent otherwise.
     #[hegel::test]
     fn conditional_headers_project_cache_fields(tc: hegel::TestCase) {
         let cv = tc.draw(generators::optional(cache_values()));
         let headers = logic::conditional_headers(cv.as_ref());
+        let servable = cv.as_ref().filter(|c| c.body.is_some());
         assert_eq!(
             headers.if_modified_since,
-            cv.as_ref().and_then(|c| c.last_modified.clone())
+            servable.and_then(|c| c.last_modified.clone())
         );
-        assert_eq!(
-            headers.if_none_match,
-            cv.as_ref().and_then(|c| c.etag.clone())
-        );
+        assert_eq!(headers.if_none_match, servable.and_then(|c| c.etag.clone()));
     }
 
-    // A 2xx response stores the response metadata and body verbatim.
+    // A 2xx response stores the response metadata verbatim and the body with
+    // the empty string collapsed to None.
     #[hegel::test]
     fn disposition_success_stores_response(tc: hegel::TestCase) {
         let code = tc.draw(generators::integers::<u16>().min_value(200).max_value(299));
@@ -492,7 +499,7 @@ mod tests {
         };
         assert_eq!(e, etag);
         assert_eq!(lm, last_modified);
-        assert_eq!(b, body);
+        assert_eq!(b, body.filter(|s| !s.is_empty()));
     }
 
     // A 304 with a cache entry reuses it, carrying any rotated validators;
@@ -525,7 +532,7 @@ mod tests {
             let logic::Disposition::Store { body: b, .. } = disp else {
                 panic!("expected Store, got {disp:?}");
             };
-            assert_eq!(b, body);
+            assert_eq!(b, body.filter(|s| !s.is_empty()));
         }
     }
 
@@ -688,6 +695,86 @@ mod tests {
             Some(normalize_etag(etag_raw).as_str())
         );
         assert_eq!(entry.last_modified.as_deref(), Some(last_modified));
+    }
+
+    #[tokio::test]
+    async fn empty_body_is_not_cached_as_servable() {
+        let server = MockServer::start().await;
+        // A misbehaving server: 200 with an etag but a completely empty body.
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .append_header("etag", "\"empty\"")
+                    .set_body_string(""),
+            )
+            .mount(&server)
+            .await;
+
+        let url = Url::parse(&server.uri()).unwrap();
+        let cache = Arc::new(Cache::new());
+
+        let first = url.fetch(&cache).await;
+        assert!(matches!(first, Err(Error::EmptySitemap(_))));
+
+        // The cached entry must not pretend to have something to serve. If it
+        // did, the next fetch would send If-None-Match, the server would say
+        // 304, and the run would serve the empty body until the entry aged
+        // out of the cache.
+        let second = url.fetch(&cache).await;
+        assert!(matches!(second, Err(Error::EmptySitemap(_))));
+
+        let received = server.received_requests().await.unwrap();
+        assert_eq!(received.len(), 2);
+        assert!(
+            !received[1].headers.contains_key("if-none-match"),
+            "second fetch sent a conditional request with nothing to serve"
+        );
+    }
+
+    #[tokio::test]
+    async fn refetches_unconditionally_when_cached_entry_has_no_body() {
+        use wiremock::matchers::header;
+
+        let server = MockServer::start().await;
+        let etag = normalize_etag("abc123");
+        // A conditional request gets 304; only an unconditional one gets the
+        // sitemap. With a bodyless cache entry, a 304 leaves nothing to serve,
+        // so the fetch must go out unconditional.
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .and(header("if-none-match", etag.as_str()))
+            .respond_with(ResponseTemplate::new(304))
+            .mount(&server)
+            .await;
+        let fresh_body = urlset_body("https://example.com/fresh");
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(fresh_body.clone()))
+            .mount(&server)
+            .await;
+
+        let url = Url::parse(&server.uri()).unwrap();
+        let cache = Arc::new(Cache::new());
+        // What an empty 200 leaves behind: metadata, no body.
+        cache.insert(
+            url.clone(),
+            CacheValue {
+                timestamp: Timestamp::now(),
+                retry_after: None,
+                last_modified: None,
+                etag: Some(etag),
+                body: None,
+            },
+        );
+
+        let body = url
+            .fetch(&cache)
+            .await
+            .expect("refetched the sitemap instead of erroring on 304");
+        assert_eq!(body, fresh_body);
+        // The fresh body must now be cached for the next run.
+        assert!(cache.get(&url).expect("entry present").body.is_some());
     }
 
     #[tokio::test]
