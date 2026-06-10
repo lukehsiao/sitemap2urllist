@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.1.8
+
+### Patch Changes
+
+- [`719fd27`](https://github.com/lukehsiao/sitemap2urllist/commit/719fd2733e884066920b8f231918580a2c459bd5) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Treat cache persistence as best-effort: a failed write warns instead of failing the run.
+
+- [`9c70f32`](https://github.com/lukehsiao/sitemap2urllist/commit/9c70f3259eac8b86d3f0133c88b7d7e92ebcb5c6) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Stop caching empty bodies as servable content, and only send conditional requests when the cache can actually serve a 304.
+
+- [`d2bc060`](https://github.com/lukehsiao/sitemap2urllist/commit/d2bc06083580dbf97d38101a601e484a47d4d3f3) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Bound concurrent child fetches of a sitemap index to 32.
+
+- [`3168756`](https://github.com/lukehsiao/sitemap2urllist/commit/3168756fd41784dc43d8b80c23eaf6fd7a7bff76) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Defer cache-file truncation until the exclusive lock is held, and flush the writer so write errors surface.
+
+- [`871dfdc`](https://github.com/lukehsiao/sitemap2urllist/commit/871dfdc0adb690961ed9083c6d63343ef636f201) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Never panic when a cached 429 retry window overflows the representable time range.
+
+- [`f398803`](https://github.com/lukehsiao/sitemap2urllist/commit/f39880303d09401cbc24ff315081aecfbc888f2d) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Replace the 30s total request deadline with granular timeouts: 10s connect, 30s stall, 5 minute ceiling.
+
+- [`db742e9`](https://github.com/lukehsiao/sitemap2urllist/commit/db742e96714a176b98111b74069cd8e67740b071) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Support gzip-compressed sitemap files (`sitemap.xml.gz`): bodies carrying the gzip magic bytes are decompressed, with the decompressed size held to the same 64 MiB cap so a compression bomb cannot bypass it.
+
+- [`a928416`](https://github.com/lukehsiao/sitemap2urllist/commit/a9284162caeade12295273cc76747acb89db669a) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Tolerate junk in unused sitemap fields (e.g. empty `<priority>`), accept empty url sets, and reject non-sitemap documents like HTML error pages explicitly.
+
+- [`aa5c362`](https://github.com/lukehsiao/sitemap2urllist/commit/aa5c3624d7803478bfb20e086a8d7b344823735c) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Decompress every member of a multi-member gzip sitemap instead of silently truncating it to the first member.
+
+- [`bd8afc6`](https://github.com/lukehsiao/sitemap2urllist/commit/bd8afc6c13fb5819a34088b2d6e11226ba8e13d0) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Warn when a sitemap URL redirects.
+
+- [`bb2faad`](https://github.com/lukehsiao/sitemap2urllist/commit/bb2faad0bf2f11ed1b0b9e8c9328e54b653c9b84) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Cap response bodies at 64 MiB.
+
+- [`0cd1132`](https://github.com/lukehsiao/sitemap2urllist/commit/0cd1132744be439b787a0ee575a1c1a3fe28839a) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Accept the HTTP-date form of `Retry-After` in addition to delta-seconds.
+
+- [`bb34881`](https://github.com/lukehsiao/sitemap2urllist/commit/bb348816cbdabc22bcd8191bc095ff9a26dc6985) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Adopt rotated `ETag`/`Last-Modified` validators from 304 responses.
+
+- [`d678e56`](https://github.com/lukehsiao/sitemap2urllist/commit/d678e561ac44167a2dccba081de32f4fb2d074d4) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Share one HTTP client across all fetches in a run for connection reuse.
+
+- [`f53916f`](https://github.com/lukehsiao/sitemap2urllist/commit/f53916f87c0dd286abc1c35ae53405c69cb4675b) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Exit quietly when stdout closes early (e.g. piping into `head`) instead of panicking.
+
+- [`171f442`](https://github.com/lukehsiao/sitemap2urllist/commit/171f44223c77582d2e81b8011b19f57443e42d75) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Warn when a sitemap run produces zero URLs, so an empty sitemap is distinguishable from output going missing.
+
+- [`0b66fb6`](https://github.com/lukehsiao/sitemap2urllist/commit/0b66fb6e31a5dd218ae91e4db2f34354eea25c19) Thanks [@lukehsiao](https://github.com/lukehsiao)! - Show warnings by default; `-q` restores errors-only.
+
+<pre>
+$ git-stats v0.1.7..v0.1.8
+Author      Commits  Changed Files  Insertions  Deletions  Net Δ
+Luke Hsiao       22             49       +1371       -160  +1211
+Total            22             49       +1371       -160  +1211
+</pre>
+
 ## 0.1.7
 
 ### Patch Changes
