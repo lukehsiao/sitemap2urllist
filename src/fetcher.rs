@@ -18,6 +18,15 @@ use crate::{
 /// a hostile server buffer us into the ground.
 const MAX_SITEMAP_BYTES: u64 = 64 * 1024 * 1024;
 
+/// The first two bytes of every gzip stream (RFC 1952).
+const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
+
+/// What the gzip magic becomes when pushed through a lossy UTF-8 conversion:
+/// 0x1f survives as a control character, 0x8b becomes U+FFFD. Versions before
+/// gzip support cached compressed bodies this way; entries with this prefix
+/// can never parse and are refetched rather than served.
+const MANGLED_GZIP_PREFIX: &str = "\u{1f}\u{fffd}";
+
 /// Build the HTTP client every fetch in a run shares. One client means one
 /// connection pool, so the children of a sitemap index (typically all on the
 /// same host) reuse connections instead of each paying a fresh TLS handshake.
@@ -184,7 +193,7 @@ pub(crate) mod logic {
 /// backstops the Content-Length check for chunked or compressed responses,
 /// which present no usable length up front. A transfer error mid-read fails
 /// the fetch with the underlying cause and leaves the cache untouched.
-async fn read_body_capped(url: &Url, mut resp: reqwest::Response, limit: u64) -> Result<String> {
+async fn read_body_capped(url: &Url, mut resp: reqwest::Response, limit: u64) -> Result<Vec<u8>> {
     // The limit always fits in usize on supported platforms.
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     let mut body = Vec::new();
@@ -200,11 +209,33 @@ async fn read_body_capped(url: &Url, mut resp: reqwest::Response, limit: u64) ->
                 }
                 body.extend_from_slice(&chunk);
             }
-            // The sitemap protocol requires UTF-8, so a lossy conversion only
-            // mangles documents that were already out of spec.
-            None => return Ok(String::from_utf8_lossy(&body).into_owned()),
+            None => return Ok(body),
         }
     }
+}
+
+/// Decompress a gzip body, failing once the output grows past `limit` bytes:
+/// the transfer-size cap alone cannot see a decompression bomb.
+fn gunzip_capped(url: &Url, bytes: &[u8], limit: u64) -> Result<Vec<u8>> {
+    use std::io::Read;
+
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(bytes)
+        // One byte past the limit is enough to prove the bomb; reading
+        // further would buffer exactly what the cap exists to prevent.
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut out)
+        .map_err(|source| Error::InvalidGzip {
+            url: url.as_str().to_string(),
+            source,
+        })?;
+    if u64::try_from(out.len()).unwrap_or(u64::MAX) > limit {
+        return Err(Error::SitemapTooLarge {
+            url: url.as_str().to_string(),
+            bytes: u64::try_from(out.len()).unwrap_or(u64::MAX),
+        });
+    }
+    Ok(out)
 }
 
 /// Apply a decided [`logic::Disposition`] to the cache and return the sitemap body
@@ -288,8 +319,15 @@ impl Fetcher for Url {
         let now = Timestamp::now();
 
         // Snapshot the entry by value so no DashMap guard is held across an await
-        // point; concurrent fetches share the map through a JoinSet.
-        let cached: Option<CacheValue> = cache.get(self).map(|e| e.value().clone());
+        // point; concurrent fetches share the map through a JoinSet. An entry
+        // whose body is a lossy-mangled gzip stream (cached by versions without
+        // gzip support) is treated as absent so this run refetches and repairs
+        // it instead of serving it via 304 until it expires.
+        let cached: Option<CacheValue> = cache.get(self).map(|e| e.value().clone()).filter(|cv| {
+            cv.body
+                .as_deref()
+                .is_none_or(|b| !b.starts_with(MANGLED_GZIP_PREFIX))
+        });
 
         // While a 429 retry window is open, serve the cached body without a request.
         // An open window with no cached body falls through and fetches.
@@ -363,7 +401,19 @@ impl Fetcher for Url {
             .and_then(|v| v.to_str().ok())
             .map(str::to_string);
         let body = if status.is_success() || status == StatusCode::NOT_MODIFIED {
-            Some(read_body_capped(self, resp, MAX_SITEMAP_BYTES).await?)
+            let bytes = read_body_capped(self, resp, MAX_SITEMAP_BYTES).await?;
+            // The protocol allows gzip-compressed sitemap files (sitemap.xml.gz),
+            // and static .gz files are served as application/gzip without a
+            // Content-Encoding header, so reqwest's transport decompression
+            // never sees them; the bytes arrive still compressed.
+            let bytes = if bytes.starts_with(&GZIP_MAGIC) {
+                gunzip_capped(self, &bytes, MAX_SITEMAP_BYTES)?
+            } else {
+                bytes
+            };
+            // The sitemap protocol requires UTF-8, so a lossy conversion only
+            // mangles documents that were already out of spec.
+            Some(String::from_utf8_lossy(&bytes).into_owned())
         } else {
             None
         };
@@ -835,6 +885,143 @@ mod tests {
             Some(normalize_etag(etag_raw).as_str())
         );
         assert_eq!(entry.last_modified.as_deref(), Some(last_modified));
+    }
+
+    fn gzip_bytes(data: &[u8]) -> Vec<u8> {
+        use flate2::{Compression, write::GzEncoder};
+        use std::io::Write;
+        let mut enc = GzEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(data).expect("gzip write");
+        enc.finish().expect("gzip finish")
+    }
+
+    // Compressing then decompressing under the cap is the identity for any
+    // payload that fits.
+    #[hegel::test]
+    fn gunzip_round_trips(tc: hegel::TestCase) {
+        let data = tc.draw(generators::vecs(generators::integers::<u8>()).max_size(1024));
+        let url = Url::parse("https://example.com/sitemap.xml.gz").expect("valid url");
+        let out = super::gunzip_capped(&url, &gzip_bytes(&data), super::MAX_SITEMAP_BYTES)
+            .expect("valid gzip decompresses");
+        assert_eq!(out, data);
+    }
+
+    // A gzip-compressed sitemap file (sitemap.xml.gz) as a static file server
+    // delivers it: gzip bytes with a gzip content type and no Content-Encoding,
+    // so reqwest's transport decompression never touches it.
+    #[tokio::test]
+    async fn gzipped_sitemap_is_decompressed() {
+        let server = MockServer::start().await;
+        let xml = urlset_body("https://example.com/gz");
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/gzip")
+                    .set_body_bytes(gzip_bytes(xml.as_bytes())),
+            )
+            .mount(&server)
+            .await;
+
+        let url = Url::parse(&server.uri()).unwrap();
+        let cache = Arc::new(Cache::new());
+        let body = url
+            .fetch(&build_client().unwrap(), &cache)
+            .await
+            .expect("fetched gzipped sitemap");
+        assert_eq!(body, xml);
+        // The cache must hold the decompressed text so a later 304 serves XML.
+        assert_eq!(
+            cache.get(&url).expect("cached").body.as_deref(),
+            Some(xml.as_str())
+        );
+    }
+
+    // A tiny compressed body that inflates past the cap must be rejected: the
+    // transfer-size cap alone cannot see a decompression bomb.
+    #[tokio::test]
+    async fn gzip_bomb_is_rejected() {
+        let server = MockServer::start().await;
+        let zeros = vec![0u8; usize::try_from(super::MAX_SITEMAP_BYTES).unwrap() + 1];
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(gzip_bytes(&zeros)))
+            .mount(&server)
+            .await;
+
+        let url = Url::parse(&server.uri()).unwrap();
+        let cache = Arc::new(Cache::new());
+        let res = url.fetch(&build_client().unwrap(), &cache).await;
+        assert!(matches!(res, Err(Error::SitemapTooLarge { .. })));
+        assert!(!cache.contains_key(&url));
+    }
+
+    // Bytes that start with the gzip magic but do not decompress are a
+    // distinct, descriptive error rather than mojibake fed to the XML parser.
+    #[tokio::test]
+    async fn corrupt_gzip_is_an_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(vec![0x1f, 0x8b, 0xde, 0xad, 0xbe]),
+            )
+            .mount(&server)
+            .await;
+
+        let url = Url::parse(&server.uri()).unwrap();
+        let cache = Arc::new(Cache::new());
+        let res = url.fetch(&build_client().unwrap(), &cache).await;
+        assert!(matches!(res, Err(Error::InvalidGzip { .. })));
+        assert!(!cache.contains_key(&url));
+    }
+
+    // Versions before gzip support cached compressed bodies through a lossy
+    // UTF-8 conversion, which can never parse. Such an entry must be ignored
+    // (refetched unconditionally) rather than served via 304 until it expires.
+    #[tokio::test]
+    async fn mangled_gzip_cache_entry_is_refetched() {
+        use wiremock::matchers::header;
+
+        let server = MockServer::start().await;
+        let etag = normalize_etag("mangled");
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .and(header("if-none-match", etag.as_str()))
+            .respond_with(ResponseTemplate::new(304))
+            .mount(&server)
+            .await;
+        let fresh_body = urlset_body("https://example.com/fresh");
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(fresh_body.clone()))
+            .mount(&server)
+            .await;
+
+        let url = Url::parse(&server.uri()).unwrap();
+        let cache = Arc::new(Cache::new());
+        // What the old lossy conversion left behind: 0x1f survives, 0x8b
+        // becomes U+FFFD.
+        cache.insert(
+            url.clone(),
+            CacheValue {
+                timestamp: Timestamp::now(),
+                retry_after: None,
+                last_modified: None,
+                etag: Some(etag),
+                body: Some(format!("\u{1f}\u{fffd}{}", "garbage")),
+            },
+        );
+
+        let body = url
+            .fetch(&build_client().unwrap(), &cache)
+            .await
+            .expect("refetched instead of serving the mangled entry");
+        assert_eq!(body, fresh_body);
+        assert_eq!(
+            cache.get(&url).expect("entry present").body.as_deref(),
+            Some(fresh_body.as_str())
+        );
     }
 
     #[tokio::test]

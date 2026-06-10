@@ -2003,6 +2003,7 @@ dependencies = [
  "clap-verbosity-flag",
  "dashmap",
  "directories",
+ "flate2",
  "hegeltest",
  "http",
  "humantime",
