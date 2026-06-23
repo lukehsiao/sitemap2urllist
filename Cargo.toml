@@ -32,8 +32,8 @@ dashmap = { version = "6.2.1", features = ["serde"] }
 directories = "6.0.0"
 flate2 = "1.1.9"
 humantime = "2.3.0"
-jiff = { version = "0.2.28", features = ["serde"] }
-log = "0.4.32"
+jiff = { version = "0.2.29", features = ["serde"] }
+log = "0.4.33"
 miette = { version = "7.6.0", features = ["fancy"] }
 quick-xml = { version = "0.40", features = ["serialize"] }
 reqwest = { version = "0.13.4", features = ["gzip", "brotli", "zstd", "deflate"] }
@@ -47,7 +47,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 url = { version = "2.5.8", features = ["serde"] }
 
 [dev-dependencies]
-hegeltest = { version = "0.17.1", features = ["jiff"] }
+hegeltest = { version = "0.22.0", features = ["jiff"] }
 http = "1.4.2"
 pretty_assertions = "1.4.1"
 tempfile = "3.27.0"
