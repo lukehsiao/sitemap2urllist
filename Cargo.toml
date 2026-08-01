@@ -26,29 +26,29 @@ pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.zip"
 pkg-fmt = "zip"
 
 [dependencies]
-clap = { version = "4.6.1", features = ["derive", "wrap_help", "cargo"] }
+clap = { version = "4.6.5", features = ["derive", "wrap_help", "cargo"] }
 clap-verbosity-flag = "3.0.4"
 dashmap = { version = "6.2.1", features = ["serde"] }
 directories = "6.0.0"
 flate2 = "1.1.9"
-humantime = "2.3.0"
-jiff = { version = "0.2.29", features = ["serde"] }
+humantime = "2.4.0"
+jiff = { version = "0.2.35", features = ["serde"] }
 log = "0.4.33"
 miette = { version = "7.6.0", features = ["fancy"] }
-quick-xml = { version = "0.40", features = ["serialize"] }
+quick-xml = { version = "0.41", features = ["serialize"] }
 reqwest = { version = "0.13.4", features = ["gzip", "brotli", "zstd", "deflate"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
-thiserror = "2.0.18"
-tokio = { version = "1.52.3", features = ["full"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.19"
+tokio = { version = "1.53.1", features = ["full"] }
 tracing = "0.1.44"
 tracing-log = "0.2.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 url = { version = "2.5.8", features = ["serde"] }
 
 [dev-dependencies]
-hegeltest = { version = "0.23.0", features = ["jiff"] }
-http = "1.4.2"
+hegeltest = { version = "0.28.6", features = ["jiff"] }
+http = "1.5.0"
 pretty_assertions = "1.4.1"
 tempfile = "3.27.0"
 wiremock = "0.6.5"
