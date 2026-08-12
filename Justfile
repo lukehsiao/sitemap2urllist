@@ -138,9 +138,11 @@ version *args:
 publish:
 	#!/usr/bin/env bash
 	set -euo pipefail
-	output=$(pnpm changeset publish 2>&1)
-	echo "$output"
-	if echo "$output" | grep -q "New tag:"; then
+	# changesets/action provides CHANGESETS_OUTPUT; create one for local runs.
+	: "${CHANGESETS_OUTPUT:=$(mktemp)}"
+	export CHANGESETS_OUTPUT
+	pnpm changeset publish
+	if grep -q '"type":"git-tag"' "$CHANGESETS_OUTPUT"; then
 	    cargo publish
 	else
 	    echo "No new version published by changesets, skipping cargo publish."
