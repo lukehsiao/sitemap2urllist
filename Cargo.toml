@@ -47,7 +47,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 url = { version = "2.5.8", features = ["serde"] }
 
 [dev-dependencies]
-hegeltest = { version = "0.28.6", features = ["jiff"] }
+hegeltest = { version = "0.31.0", features = ["jiff"] }
 http = "1.5.0"
 pretty_assertions = "1.4.1"
 tempfile = "3.27.0"
