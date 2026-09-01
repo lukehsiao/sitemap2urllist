@@ -28,7 +28,7 @@ jobs:
           # changesets/action v2 pushes the release commit and tags through
           # the GitHub API, so the git credential is not needed.
           persist-credentials: false
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: latest
           cache: true
