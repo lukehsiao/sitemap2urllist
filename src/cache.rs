@@ -214,7 +214,7 @@ mod tests {
 
     use hegel::TestCase;
     use hegel::extras::jiff as jiff_gs;
-    use hegel::generators;
+    use hegel::generators::{self, Generator};
 
     use super::*;
 
@@ -228,19 +228,28 @@ mod tests {
     // a larger cap mostly inflates per-case entropy and runtime.
     const MAX_TEST_ENTRIES: usize = 50;
 
-    // A well-formed http(s) URL, enough to act as a distinct cache key.
-    #[hegel::composite]
-    fn urls(tc: hegel::TestCase) -> Url {
-        let s = tc.draw(
-            generators::from_regex(r"https?://[a-z]{1,10}\.[a-z]{2,5}/[a-z]{0,15}").fullmatch(true),
-        );
-        Url::parse(&s).expect("generated string is a valid URL")
+    // A well-formed http(s) URL, enough to act as a distinct cache key. `Url` is
+    // a foreign type, so it cannot implement hegel's `PrettyPrintable`; printing
+    // it as a `Url::parse` call keeps a reported counterexample pasteable back
+    // into a test, which the derived `Debug` (a dump of the parser's internal
+    // offsets) would not be.
+    fn urls() -> impl hegel::PrintableGenerator<Url> {
+        generators::from_regex(r"https?://[a-z]{1,10}\.[a-z]{2,5}/[a-z]{0,15}")
+            .fullmatch(true)
+            .map(|s| Url::parse(&s).expect("generated string is a valid URL"))
+            .print_with(|url, printer| {
+                printer.text(&format!("Url::parse({:?}).unwrap()", url.as_str()));
+            })
     }
+
+    // Report drawn `CacheValue`s through their `Debug` representation. The impl is
+    // crate-global, so it also covers the fetcher tests' own value generator.
+    hegel::pretty_print_as_debug!(CacheValue);
 
     // A `CacheValue` with arbitrary fields. All are optional except `timestamp`,
     // and the retry span is kept within what jiff can represent.
     #[hegel::composite]
-    fn cache_values(tc: hegel::TestCase) -> CacheValue {
+    fn cache_values(tc: &hegel::TestCase) -> CacheValue {
         // retry_after only ever holds a time-only span in production, so we
         // generate seconds rather than jiff_gs::spans(): its calendar-unit spans
         // are out of domain and would trip the time-only `spans_equal`.

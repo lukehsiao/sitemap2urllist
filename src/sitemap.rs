@@ -18,7 +18,7 @@ fn root_element_name(xml: &str) -> Option<String> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(start) | Event::Empty(start)) => {
-                return Some(String::from_utf8_lossy(start.local_name().as_ref()).into_owned());
+                return Some(start.local_name().as_ref().to_owned());
             }
             Ok(Event::Eof) | Err(_) => return None,
             _ => {}

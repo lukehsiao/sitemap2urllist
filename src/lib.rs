@@ -124,7 +124,7 @@ pub async fn run(args: Args) -> Result<()> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use hegel::generators;
+    use hegel::generators::{self, Generator};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -190,16 +190,20 @@ mod tests {
         }
     }
 
-    // A vec of well-formed URLs, the unit `collect_urls` operates on.
-    #[hegel::composite]
-    fn url_vec(tc: hegel::TestCase) -> Vec<Url> {
-        let strings = tc.draw(generators::vecs(
-            generators::from_regex(r"https?://[a-z]{1,8}\.[a-z]{2,4}/[a-z]{0,10}").fullmatch(true),
-        ));
-        strings
-            .into_iter()
-            .map(|s| Url::parse(&s).expect("generated string is a valid URL"))
-            .collect()
+    // A vec of well-formed URLs, the unit `collect_urls` operates on. `Url` is a
+    // foreign type, so it cannot implement hegel's `PrettyPrintable`; printing
+    // each element as a `Url::parse` call keeps a reported counterexample
+    // pasteable back into a test, which the derived `Debug` (a dump of the
+    // parser's internal offsets) would not be.
+    fn url_vec() -> impl hegel::PrintableGenerator<Vec<Url>> {
+        generators::vecs(
+            generators::from_regex(r"https?://[a-z]{1,8}\.[a-z]{2,4}/[a-z]{0,10}")
+                .fullmatch(true)
+                .map(|s| Url::parse(&s).expect("generated string is a valid URL"))
+                .print_with(|url, printer| {
+                    printer.text(&format!("Url::parse({:?}).unwrap()", url.as_str()));
+                }),
+        )
     }
 
     // The output is exactly the sorted, deduplicated set of input locations. A
