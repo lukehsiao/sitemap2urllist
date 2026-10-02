@@ -474,7 +474,7 @@ mod tests {
             model: HashMap::new(),
             urls,
         };
-        hegel::stateful::run(machine, tc);
+        hegel::stateful::machine(machine).run(tc);
     }
 
     #[test]
