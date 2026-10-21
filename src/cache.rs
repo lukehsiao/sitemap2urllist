@@ -228,8 +228,7 @@ mod tests {
     // a larger cap mostly inflates per-case entropy and runtime.
     const MAX_TEST_ENTRIES: usize = 50;
 
-    // A well-formed http(s) URL, enough to act as a distinct cache key. `Url` is
-    // a foreign type, so it cannot implement hegel's `PrettyPrintable`; printing
+    // A well-formed http(s) URL, enough to act as a distinct cache key. Printing
     // it as a `Url::parse` call keeps a reported counterexample pasteable back
     // into a test, which the derived `Debug` (a dump of the parser's internal
     // offsets) would not be.
@@ -241,10 +240,6 @@ mod tests {
                 printer.text(&format!("Url::parse({:?}).unwrap()", url.as_str()));
             })
     }
-
-    // Report drawn `CacheValue`s through their `Debug` representation. The impl is
-    // crate-global, so it also covers the fetcher tests' own value generator.
-    hegel::pretty_print_as_debug!(CacheValue);
 
     // A `CacheValue` with arbitrary fields. All are optional except `timestamp`,
     // and the retry span is kept within what jiff can represent.

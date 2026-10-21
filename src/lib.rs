@@ -190,8 +190,7 @@ mod tests {
         }
     }
 
-    // A vec of well-formed URLs, the unit `collect_urls` operates on. `Url` is a
-    // foreign type, so it cannot implement hegel's `PrettyPrintable`; printing
+    // A vec of well-formed URLs, the unit `collect_urls` operates on. Printing
     // each element as a `Url::parse` call keeps a reported counterexample
     // pasteable back into a test, which the derived `Debug` (a dump of the
     // parser's internal offsets) would not be.
