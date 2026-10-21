@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.9
+
+### Patch Changes
+
+- [`1abcb6f`](https://github.com/lukehsiao/sitemap2urllist/commit/1abcb6f69d1381c2f2347c536c39713d0111bbdc) - **fix**: reject certificates issued by the compromised eMudhra emSign G3 intermediates ([Mozilla bug 2083449](https://bugzilla.mozilla.org/show_bug.cgi?id=2083449)).
+  
+  The private keys of eight eMudhra intermediates are now public, so anyone can mint certificates that chain to them. `rustls-webpki` 0.103.16 rejects any path through those keys ([RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382)), which protects Linux builds even while the system trust store still holds the emSign roots. `webpki-root-certs` 1.0.10 drops `emSign ECC Root CA - G3` from the bundle that `wasm32` builds use ([RUSTSEC-2026-0383](https://rustsec.org/advisories/RUSTSEC-2026-0383)). macOS and Windows builds use the OS verifier, so they depend on OS trust updates.
+  
+  This release also takes `rustls` 0.23.46, which fixes [RUSTSEC-2026-0346](https://rustsec.org/advisories/RUSTSEC-2026-0346), [RUSTSEC-2026-0347](https://rustsec.org/advisories/RUSTSEC-2026-0347), [RUSTSEC-2026-0348](https://rustsec.org/advisories/RUSTSEC-2026-0348), and [RUSTSEC-2026-0349](https://rustsec.org/advisories/RUSTSEC-2026-0349), and upgrades all other dependencies to their latest versions.
+
+<pre>
+$ git-stats v0.1.8..v0.1.9
+Author           Commits  Changed Files  Insertions  Deletions  Net Δ
+dependabot[bot]       21             42         +93        -87     +6
+Luke Hsiao            14             50       +1579      -2252   -673
+Total                 35             92       +1672      -2339   -667
+</pre>
+
 ## 0.1.8
 
 ### Patch Changes
